@@ -410,36 +410,6 @@ def load_prompt(file_path: str) -> str:
     with open(file_path, "r", encoding="utf-8") as f:
         return f.read()
 
-def split_query_safe(query: str) -> List[str]:
-    query = query.strip()
-
-    # Split on question marks first (but don't discard them)
-    parts = re.split(r'\?\s*', query)
-    final_queries = []
-
-    for part in parts:
-        part = part.strip()
-        if not part:
-            continue
-
-        # Split only on logical conjunctions
-        subparts = re.split(r'\b(?:and|also|as well as|&|then|along with)\b', part, flags=re.IGNORECASE)
-        cleaned_subs = [s.strip() for s in subparts if s.strip()]
-        
-        # Check if most subparts are meaningful (e.g., > 5 words)
-        long_enough = [s for s in cleaned_subs if len(s.split()) >= 5]
-
-        if len(cleaned_subs) >= 2 and len(long_enough) >= 2:
-            # Accept split if it's meaningful
-            final_queries.extend(long_enough)
-        else:
-            # Otherwise treat as a single query
-            final_queries.append(part)
-
-    # Remove any residual empty or trivial entries
-    return [q for q in final_queries if len(q.strip().split()) >= 4]
-
-
 def extract_json_from_response(response: str) -> dict:
     try:
         # Remove Markdown-style ```json blocks

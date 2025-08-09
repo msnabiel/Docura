@@ -34,8 +34,8 @@ _This site includes interactive UI, API documentation, and step-by-step guides._
 ### Step 1: Environment Setup
 ```bash
 # Clone repository
-git clone <your-repo>
-cd rag-pipeline
+git clone https://github.com/msnabiel/Docura.git
+cd Docura
 
 # Create virtual environment
 python -m venv venv
@@ -50,8 +50,7 @@ pip install -r requirements.txt
 ### Step 2: Configure Environment
 Create `.env` file:
 ```env
-OPENAI_API_KEY=your_openai_key
-GEMINI_API_KEY=your_gemini_key
+GEMINI_API_KEY_PAID=your_gemini_key
 ```
 ### Step 3: Start the Application
 ```bash
@@ -62,8 +61,12 @@ uvicorn app:app --reload --port 8000
 ```
 
 ### Step 4: Access the Interface
-Open browser: `http://localhost:8000`
+Open API at for detailed information: 
+```bash 
+http://localhost:8000
+```
 
+## 📈 Application Interface
 ![Application Interface](./images/chat_interface.png)
 
 ## 📈 Performance Metrics
@@ -76,39 +79,19 @@ Open browser: `http://localhost:8000`
 | MRR@10 | 0.64 | **0.85** |
 | Response Time | 150ms | 220ms |
 
-## 🚀 Deployment
-
-### Docker Setup
-```bash
-docker build -t rag-pipeline .
-docker run -p 8000:8000 rag-pipeline
-```
-
-### Environment Variables
-```env
-FAISS_INDEX_TYPE=HNSW  # or FlatIP
-MAX_CHUNK_SIZE=512
-OVERLAP_SIZE=50
-```
-
 ## 🛠 Development
 
 ### Project Structure
 ```
-├── src/
-│   ├── embeddings/     # Multi-embedding models
-│   ├── retrieval/      # FAISS + BM25 + ORFF
-│   ├── agents/         # Agentic reasoning
-│   └── api/           # FastAPI endpoints
-├── docs/
-│   └── images/        # UI screenshots
+├── embeddings/        # Multi-embedding models
+├── retrieval/         # FAISS + BM25 + ORFF
+├── agents/            # Agentic reasoning
+├── api/               # FastAPI endpoints
+├── .env.example
+├── requirements.txt   # Dependencies
+├── images/
 ├── data/              # Sample documents
 └── tests/             # Unit tests
-```
-
-### Testing
-```bash
-pytest tests/ -v
 ```
 
 ## 📋 Supported Formats
@@ -140,5 +123,5 @@ MIT License - see [LICENSE](LICENSE) file for details.
 ## 📞 Support
 
 - **Issues**: [GitHub Issues](https://github.com/username/repo/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/username/repo/discussions)
-- **Email**: support@example.com
+- **Discussions**: [GitHub Discussions](https://github.com/msnabiel/repo/discussions)
+- **Email**: msyednabiel@gmail.com
