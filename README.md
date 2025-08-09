@@ -2,6 +2,10 @@
 
 An advanced **Retrieval-Augmented Generation (RAG)** pipeline with **agentic reasoning capabilities** for high-accuracy document search and contextual response generation.
 
+> **Note:** This repository contains **only the backend code** for Docura.  
+> The frontend source code is available here: [Docura-AI Frontend Repository](https://github.com/msnabiel/Docura-AI)
+
+
 ## 📌 **Live Demo & Documentation**
 🚀 **Live Website:** **https://docura-ai.vercel.app**  
 _This site includes interactive UI, API documentation, and step-by-step guides._
@@ -20,11 +24,14 @@ _This site includes interactive UI, API documentation, and step-by-step guides._
 
 ![System Architecture](./images/perfecto2.png)
 
+## 📈 Application Interface
+![Application Interface](./images/chat_interface.png)
+
 ## Project Structure
 ```
 ├── main.py            # FastAPI app entry point
 ├── embeddings/        # Multi-embedding models
-├── retrieval/         # FAISS + BM25 + ORFF
+├── retrieval/         # FAISS + BM25 + RFF
 ├── agents/            # Agentic reasoning
 ├── api/               # FastAPI endpoints
 ├── .env.example
@@ -68,19 +75,17 @@ GEMINI_API_KEY_PAID=your_gemini_key
 ### Step 3: Start the Application
 ```bash
 # Start API server
-python app.py
+python main.py
 # or
 uvicorn app:app --reload --port 8000
 ```
 
 ### Step 4: Access the Interface
-Open API at for detailed information: 
+Open API at below URL for detailed information: 
 ```bash 
 http://localhost:8000
 ```
 
-## 📈 Application Interface
-![Application Interface](./images/chat_interface.png)
 
 ## 📈 Performance Metrics & USP
 
