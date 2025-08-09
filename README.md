@@ -2,8 +2,8 @@
 
 An advanced **Retrieval-Augmented Generation (RAG)** pipeline with **agentic reasoning capabilities** for high-accuracy document search and contextual response generation.
 
-> **Note:** This repository contains **only the backend code** for Docura.  
-> The frontend source code is available here: [Docura-AI Frontend Repository](https://github.com/msnabiel/Docura-AI)
+**Note:** This repository contains only the **backend code** for Docura.  
+The frontend source code can be found here: [Docura-AI Frontend Repository](https://github.com/msnabiel/Docura-AI)
 
 
 ## 📌 **Live Demo & Documentation**
