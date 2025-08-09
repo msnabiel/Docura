@@ -4,9 +4,9 @@ An advanced **Retrieval-Augmented Generation (RAG)** pipeline with **agentic rea
 
 ## 📌 **Live Demo & Documentation**
 🚀 **Live Website:** **https://docura-ai.vercel.app**  
-_This site includes interactive demos, API documentation, and step-by-step guides._
+_This site includes interactive UI, API documentation, and step-by-step guides._
 
-![Main Dashboard](./docs/images/dashboard_main.png)
+![Main Dashboard](./images/dashboard.png)
 
 ## 🚀 Key Features
 
