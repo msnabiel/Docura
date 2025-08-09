@@ -1,6 +1,6 @@
-# 🔍 RAG-based Agentic FAISS Pipeline
+# 🔍 Docura - RAG-based Agentic FAISS Pipeline
 
-An advanced **Retrieval-Augmented Generation (RAG)** pipeline with **agentic reasoning capabilities** for high-accuracy document search and contextual response generation.
+Docura is an advanced **Retrieval-Augmented Generation (RAG)** pipeline with **agentic reasoning capabilities** for high-accuracy document search and contextual response generation.
 
 **Note:** This repository contains only the **backend code** for Docura.  
 The frontend source code can be found here: [Docura-AI Frontend Repository](https://github.com/msnabiel/Docura-AI)
