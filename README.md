@@ -60,16 +60,7 @@ uvicorn app:app --reload --port 8000
 ### Step 4: Access the Interface
 Open browser: `http://localhost:8000`
 
-![Application Interface](./docs/images/app_running.png)
-
-### Document Upload Interface
-![Document Upload](./docs/images/upload_interface.png)
-
-### Query Interface
-![Query Interface](./docs/images/query_interface.png)
-
-### Results Dashboard
-![Results Dashboard](./docs/images/results_dashboard.png)
+![Application Interface](./images/chat_interface.png)
 
 ## 📈 Performance Metrics
 
