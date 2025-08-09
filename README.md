@@ -20,6 +20,19 @@ _This site includes interactive UI, API documentation, and step-by-step guides._
 
 ![System Architecture](./images/perfecto2.png)
 
+## Project Structure
+```
+├── main.py            # FastAPI app entry point
+├── embeddings/        # Multi-embedding models
+├── retrieval/         # FAISS + BM25 + ORFF
+├── agents/            # Agentic reasoning
+├── api/               # FastAPI endpoints
+├── .env.example
+├── requirements.txt   # Dependencies
+├── images/
+├── data/              # Sample documents
+└── tests/             # Unit tests
+```
 
 ## 📊 Retrieval Components
 
@@ -78,21 +91,6 @@ http://localhost:8000
 | Recall@5 | 0.78 | **0.92** |
 | MRR@10 | 0.64 | **0.85** |
 | Response Time | 150ms | 220ms |
-
-## 🛠 Development
-
-### Project Structure
-```
-├── embeddings/        # Multi-embedding models
-├── retrieval/         # FAISS + BM25 + ORFF
-├── agents/            # Agentic reasoning
-├── api/               # FastAPI endpoints
-├── .env.example
-├── requirements.txt   # Dependencies
-├── images/
-├── data/              # Sample documents
-└── tests/             # Unit tests
-```
 
 ## 📋 Supported Formats
 
