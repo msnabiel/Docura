@@ -2,6 +2,10 @@
 
 An advanced **Retrieval-Augmented Generation (RAG)** pipeline with **agentic reasoning capabilities** for high-accuracy document search and contextual response generation.
 
+## 📌 **Live Demo & Documentation**
+🚀 **Live Website:** **https://docura-ai.vercel.app**  
+_This site includes interactive demos, API documentation, and step-by-step guides._
+
 ![Main Dashboard](./docs/images/dashboard_main.png)
 
 ## 🚀 Key Features
