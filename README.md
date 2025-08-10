@@ -47,11 +47,11 @@ _This site includes interactive UI, API documentation, and step-by-step guides._
 
 ## 📊 Retrieval Components
 
-| Component | Model | Purpose | Weight |
-|-----------|-------|---------|--------|
-| Dense Embeddings | BGE EN v1.5 | Semantic similarity | 0.65 |
-| Light Embeddings | all-MiniLM-L6-v2 | Fast retrieval | 0.20 |
-| Keyword Search | BM25 | Exact matching | 0.15 |
+| Component        | Model(s)                               | Purpose             | Weight |
+|------------------|----------------------------------------|---------------------|--------|
+| Embeddings       | BGE EN v1.5 + all-MiniLM-L6-v2          | Semantic similarity & fast retrieval | 0.67   |
+| Keyword Search   | BM25                                   | Exact matching      | 0.33   |
+
 
 ## 🚀 How to Run
 
