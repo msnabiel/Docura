@@ -2,12 +2,9 @@ import os
 import json
 import time
 import re
-import hashlib
-import pickle
 import random
-import requests
 import httpx
-from typing import List, Union, Optional, Dict, Any
+from typing import List, Union, Dict, Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import asyncio
 from contextlib import asynccontextmanager
@@ -16,94 +13,23 @@ import faiss
 from sentence_transformers import SentenceTransformer
 from rank_bm25 import BM25Okapi
 import google.generativeai as genai
-from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import Response, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.routing import APIRouter
-from pydantic import BaseModel, Field
-from pathlib import Path
 from dotenv import load_dotenv
 import torch
-import requests
-def call_external_api(need_api: dict) -> str:
-    """
-    Calls an external API based on the Gemini `need_api` object.
-    
-    Args:
-        need_api (dict): A dict with keys like 'type', 'url', 'headers', and 'body'.
-        
-    Returns:
-        str: API response text (or JSON as a string).
-    """
-    method = need_api.get("type", "GET").upper()
-    url = need_api.get("url")
-    headers = need_api.get("headers", {})
-    body = need_api.get("body", {})
+from utils import  extract_final_answer, clean_string_post, classify_url_by_response, clean_text_for_gemini,extract_json_from_response, is_url
+from cache import DocumentCache
+from models import (
+    HackRxRunRequest,
+    ParseRequest,
+    ParseBatchRequest,
+    SearchRequest,
+    MultiSearchRequest,
+    IngestionResult
+)
 
-    try:
-        if method == "GET":
-            response = requests.get(url, headers=headers, timeout=10)
-        elif method == "POST":
-            response = requests.post(url, headers=headers, json=body, timeout=10)
-        else:
-            return f"Unsupported request method: {method}"
-
-        if response.status_code == 200:
-            # Try to return JSON string if possible
-            try:
-                return response.json()
-            except Exception:
-                return response.text
-        else:
-            return f"API returned status code {response.status_code}"
-
-    except Exception as e:
-        return f"API call failed: {str(e)}"
-
-def classify_url_by_response(url: str) -> str:
-    """
-    Classifies a URL based on what the server returns.
-
-    Returns:
-        - 'document': if it's a file (PDF, DOCX, XLSX, etc.)
-        - 'web': if it's an HTML page
-        - 'api': if it's JSON (e.g., API response)
-        - 'error': if request fails or response is invalid
-        - 'unknown': if type can't be determined
-    """
-    try:
-        response = requests.get(url, stream=True, timeout=10)
-        if response.status_code != 200:
-            return 'error'
-
-        content_type = response.headers.get('Content-Type', '').lower()
-
-        # Common document types
-        if any(doc_type in content_type for doc_type in [
-            "application/pdf",
-            "application/msword",
-            "application/vnd.openxmlformats-officedocument",
-            "application/vnd.ms-excel",
-            "text/plain",
-            "text/csv"
-        ]):
-            return 'document'
-
-        # JSON = API
-        if "application/json" in content_type:
-            return 'api'
-
-        # HTML = web page
-        if "text/html" in content_type:
-            return 'web'
-
-        return 'unknown'
-    except Exception:
-        return 'error'
-
-class IngestionResult(BaseModel):
-    source: str
-    success: bool
 
 # Import the direct text extraction functions
 from text_extractor import (
@@ -130,11 +56,10 @@ logging.basicConfig(
 )
 # Get logger
 logger = logging.getLogger("app")
-#logger = logging.getLogger(__name__)
 
 # Test logging is working
 logger.info("=== LOGGING SYSTEM INITIALIZED ===")
-logger.info(f"Log file: uvicorn.log")
+logger.info(f"Log file: app.log")
 logger.info(f"Log level: {logging.getLevelName(logger.level)}")
 logger.info("=== LOGGING SYSTEM READY ===\n")
 
@@ -151,26 +76,27 @@ CACHE_DIR = "/tmp/document_cache"  # Cache directory for processed documents
 BEARER_API_TOKEN = "Bearer d36115d114e821579e99ec6c83bad42017fc11f9cca5a8cbeb1b471c3ae493e4"
 # Load from .env.local
 load_dotenv(dotenv_path=".env.local")
-GEMINI_API_KEY_1 = os.getenv("GEMINI_API_KEY_1")
-GEMINI_API_KEY_2 = os.getenv("GEMINI_API_KEY_2")
-GEMINI_API_KEY_3 = os.getenv("GEMINI_API_KEY_3")
-GEMINI_API_KEY_4 = os.getenv("GEMINI_API_KEY_4")
-GEMINI_API_KEY_5 = os.getenv("GEMINI_API_KEY_5")
-GEMINI_API_KEY_6 = os.getenv("GEMINI_API_KEY_6")
-GEMINI_API_KEY_7 = os.getenv("GEMINI_API_KEY_7")
-GEMINI_API_KEY_8 = os.getenv("GEMINI_API_KEY_8")
-GEMINI_API_KEY_9 = os.getenv("GEMINI_API_KEY_9")
-GEMINI_API_KEY_10 = os.getenv("GEMINI_API_KEY_10")
+#GEMINI_API_KEY_1 = os.getenv("GEMINI_API_KEY_1")
+#GEMINI_API_KEY_2 = os.getenv("GEMINI_API_KEY_2")
+#GEMINI_API_KEY_3 = os.getenv("GEMINI_API_KEY_3")
+#GEMINI_API_KEY_4 = os.getenv("GEMINI_API_KEY_4")
+#GEMINI_API_KEY_5 = os.getenv("GEMINI_API_KEY_5")
+#GEMINI_API_KEY_6 = os.getenv("GEMINI_API_KEY_6")
+#GEMINI_API_KEY_7 = os.getenv("GEMINI_API_KEY_7")
+#GEMINI_API_KEY_8 = os.getenv("GEMINI_API_KEY_8")
+#GEMINI_API_KEY_9 = os.getenv("GEMINI_API_KEY_9")
+#GEMINI_API_KEY_10 = os.getenv("GEMINI_API_KEY_10")
 GEMINI_API_KEY_PAID = os.getenv("GEMINI_API_KEY_PAID")
 
 # Validate API keys and create a list of valid keys
 def get_valid_gemini_keys():
     """Get a list of valid Gemini API keys"""
-    all_keys = [
+    """all_keys = [
         GEMINI_API_KEY_1, GEMINI_API_KEY_2, GEMINI_API_KEY_3, GEMINI_API_KEY_4, GEMINI_API_KEY_5,
         GEMINI_API_KEY_6, GEMINI_API_KEY_7, GEMINI_API_KEY_8, GEMINI_API_KEY_9, GEMINI_API_KEY_10,
         GEMINI_API_KEY_PAID
-    ]
+    ]"""
+    all_keys = [GEMINI_API_KEY_PAID]
     valid_keys = [key for key in all_keys if key and key.strip()]
     
     if not valid_keys:
@@ -181,98 +107,10 @@ def get_valid_gemini_keys():
     return valid_keys
 
 VALID_GEMINI_KEYS = get_valid_gemini_keys()
-
-def clean_text_for_gemini(raw_text: str) -> str:
-    """
-    Cleans and formats messy input text into a single readable paragraph.
-    Designed for LLM input (e.g., Gemini, GPT).
-    """
-
-    # Remove excessive spaces and normalize line breaks
-    text = raw_text.strip()
-    text = re.sub(r'\r\n|\r', '\n', text)             # Normalize newlines
-    text = re.sub(r'\n{2,}', '\n', text)              # Collapse multiple blank lines
-    text = re.sub(r'[ \t]+', ' ', text)               # Collapse multiple spaces/tabs
-    text = re.sub(r'\n', '. ', text)                  # Treat newlines as sentence ends
-    text = re.sub(r'\.\s*\.', '.', text)              # Remove accidental double periods
-    text = re.sub(r'\s*\.\s*', '. ', text)            # Ensure spacing after periods
-    text = re.sub(r'\s{2,}', ' ', text)               # Final whitespace cleanup
-
-    # Capitalize first letter of the paragraph
-    text = text[0].upper() + text[1:] if text else ""
-
-    return text.strip()
-def clean_string_post(text: str) -> str:
-    """
-    Clean a string by:
-    - Replacing escaped quotes (\" -> ")
-    - Removing unescaped backslashes (\)
-    - Replacing newlines with space
-    - Replacing em dashes (\u2014) with --
-    - Collapsing multiple spaces
-    """
-    import re
-
-    # Replace escaped double quotes
-    cleaned = text.replace('\\"', '"')
-
-    # Replace em dash Unicode with "--"
-    cleaned = cleaned.replace('\u2014', '--')
-
-    # Remove unescaped backslashes (not part of escape sequences)
-    # Use regex to avoid removing backslashes that are part of Unicode escapes
-    cleaned = re.sub(r'\\(?!u[0-9a-fA-F]{4})', '', cleaned)
-
-    # Replace one or more newline characters with a space
-    cleaned = re.sub(r'\n+', ' ', cleaned)
-
-    # Collapse multiple spaces into one
-    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
-
-    return cleaned
-
-
-
-def extract_answer_from_json_block(text: str) -> str:
-    """
-    Extracts the 'answer' field from any embedded JSON block in the text.
-    Returns an empty string if not found or if JSON is malformed.
-    """
-    # Find the first JSON-looking block
-    json_match = re.search(r'\{.*?\}', text, re.DOTALL)
-    
-    if json_match:
-        try:
-            json_obj = json.loads(json_match.group())
-            return json_obj.get("answer", "").strip()
-        except json.JSONDecodeError:
-            return ""
-    
-    return ""
-
-def extract_final_answer(text: str) -> str:
-    """
-    Extracts the most relevant answer from the input text.
-    If a JSON block with an 'answer' field exists, that is returned.
-    Otherwise, the full text is returned as-is.
-    """
-    # Search for JSON object
-    json_match = re.search(r'\{.*?\}', text, re.DOTALL)
-    
-    if json_match:
-        try:
-            json_obj = json.loads(json_match.group())
-            if "answer" in json_obj:
-                return json_obj["answer"].strip()
-        except json.JSONDecodeError:
-            pass  # Ignore malformed JSON
-
-    # No JSON or no answer field — return full string
-    return text.strip()
-
 MAX_WORKERS = 10
 CHUNK_SIZE = 512
 OVERLAP_SIZE = 50
+
 # Embedding optimization settings
 EMBEDDING_BATCH_SIZE = 64 if DEVICE == "cuda" else 32  # Larger batches for GPU
 EMBEDDING_WORKERS = 2 if DEVICE == "cuda" else 4  # Fewer workers for GPU to avoid memory issues
@@ -283,193 +121,12 @@ EMBEDDING_WORKERS = 2 if DEVICE == "cuda" else 4  # Fewer workers for GPU to avo
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(CACHE_DIR, exist_ok=True)
 
-class DocumentCache:
-    """Cache manager for processed documents to avoid reprocessing"""
-    
-    def __init__(self, cache_dir: str = CACHE_DIR):
-        self.cache_dir = cache_dir
-        self.cache_stats = {"hits": 0, "misses": 0, "saves": 0}
-        
-        # Ensure cache directory exists
-        os.makedirs(cache_dir, exist_ok=True)
-        logger.info(f"Document cache initialized at {cache_dir} (no expiry)")
-    
-    def _get_cache_key(self, source: str) -> str:
-        """Generate a cache key for the document source"""
-        # For URLs, use the URL itself as part of the key
-        # For local files, use file path and modification time
-        if source.startswith(('http://', 'https://')):
-            # For URLs, use URL hash
-            return hashlib.md5(source.encode()).hexdigest()
-        else:
-            # For local files, use file path and modification time
-            try:
-                stat = os.stat(source)
-                key_data = f"{source}:{stat.st_mtime}:{stat.st_size}"
-                return hashlib.md5(key_data.encode()).hexdigest()
-            except:
-                # Fallback to just the path
-                return hashlib.md5(source.encode()).hexdigest()
-    
-    def _get_cache_path(self, cache_key: str) -> str:
-        """Get the full path for a cache file"""
-        return os.path.join(self.cache_dir, f"{cache_key}.pkl")
-    
-    def _is_cache_valid(self, cache_path: str) -> bool:
-        """Check if cache file exists (no expiry)"""
-        try:
-            return os.path.exists(cache_path)
-        except:
-            return False
-    
-    def get(self, source: str) -> Optional[Dict[str, Any]]:
-        """Get cached document data if available"""
-        cache_key = self._get_cache_key(source)
-        cache_path = self._get_cache_path(cache_key)
-        
-        if self._is_cache_valid(cache_path):
-            try:
-                with open(cache_path, 'rb') as f:
-                    cached_data = pickle.load(f)
-                
-                self.cache_stats["hits"] += 1
-                logger.info(f"Cache HIT for {source} (key: {cache_key})")
-                return cached_data
-            except Exception as e:
-                logger.warning(f"Failed to load cache for {source}: {e}")
-        
-        self.cache_stats["misses"] += 1
-        logger.info(f"Cache MISS for {source} (key: {cache_key})")
-        return None
-    
-    def set(self, source: str, data: Dict[str, Any]) -> bool:
-        """Cache document data"""
-        cache_key = self._get_cache_key(source)
-        cache_path = self._get_cache_path(cache_key)
-        
-        try:
-            # Add metadata to cached data
-            cached_data = {
-                "data": data,
-                "source": source,
-                "cache_key": cache_key,
-                "cached_at": time.time()
-            }
-            
-            with open(cache_path, 'wb') as f:
-                pickle.dump(cached_data, f)
-            
-            self.cache_stats["saves"] += 1
-            logger.info(f"Cache SAVED for {source} (key: {cache_key})")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to save cache for {source}: {e}")
-            return False
-    
-    def clear_expired(self) -> int:
-        """Clear expired cache entries (no-op since no expiry)"""
-        logger.info("No cache expiry configured - no entries to clear")
-        return 0
-    
-    def get_stats(self) -> Dict[str, Any]:
-        """Get cache statistics"""
-        try:
-            cache_size = len([f for f in os.listdir(self.cache_dir) if f.endswith('.pkl')])
-        except:
-            cache_size = 0
-        
-        hit_rate = 0
-        if self.cache_stats["hits"] + self.cache_stats["misses"] > 0:
-            hit_rate = self.cache_stats["hits"] / (self.cache_stats["hits"] + self.cache_stats["misses"])
-        
-        return {
-            "cache_dir": self.cache_dir,
-            "cache_size": cache_size,
-            "hits": self.cache_stats["hits"],
-            "misses": self.cache_stats["misses"],
-            "saves": self.cache_stats["saves"],
-            "hit_rate": f"{hit_rate:.2%}",
-            "expiry": "None (permanent cache)"
-        }
-    
-    def clear_all(self) -> bool:
-        """Clear all cache entries"""
-        try:
-            for filename in os.listdir(self.cache_dir):
-                if filename.endswith('.pkl'):
-                    os.remove(os.path.join(self.cache_dir, filename))
-            logger.info("All cache entries cleared")
-            return True
-        except Exception as e:
-            logger.error(f"Error clearing all cache: {e}")
-            return False
 
 # Configure Gemini
-genai.configure(api_key=GEMINI_API_KEY_1)
+genai.configure(api_key=GEMINI_API_KEY_PAID)
 def load_prompt(file_path: str) -> str:
     with open(file_path, "r", encoding="utf-8") as f:
         return f.read()
-
-def extract_json_from_response(response: str) -> dict:
-    try:
-        # Remove Markdown-style ```json blocks
-        cleaned = re.sub(r"```(?:json)?", "", response).strip("` \n")
-
-        # Try loading as JSON
-        parsed_json = json.loads(cleaned)
-        
-        # Ensure required fields exist
-        if "answer" not in parsed_json:
-            parsed_json["answer"] = ""
-        if "confidence_score" not in parsed_json:
-            parsed_json["confidence_score"] = 0.5
-        if "need_api" not in parsed_json:
-            parsed_json["need_api"] = False
-            
-        return parsed_json
-
-    except Exception:
-        # Fallback: handle plain text like "Answer: ..."
-        cleaned = cleaned.strip()
-        if cleaned.lower().startswith("answer:"):
-            return {
-                "answer": cleaned[len("answer:"):].strip(),
-                "confidence_score": 0.5,
-                "need_api": False
-            }
-
-        # Otherwise return as plain text under "answer"
-        if cleaned:
-            return {
-                "answer": cleaned,
-                "confidence_score": 0.5,
-                "need_api": False
-            }
-
-        raise ValueError("Failed to parse Gemini response: Empty or invalid format.")
-
-
-# Pydantic models
-class HackRxRunRequest(BaseModel):
-    documents: Union[str, List[str]]
-    questions: List[str]
-    search_strategy: str = Field(default="ensemble", description="Search strategy: semantic, lexical, hybrid, ensemble")
-
-class ParseRequest(BaseModel):
-    url: str
-
-class ParseBatchRequest(BaseModel):
-    urls: List[str]
-
-class SearchRequest(BaseModel):
-    query: str
-    strategy: str = Field(default="ensemble", description="Search strategy: semantic, lexical, hybrid, ensemble")
-    top_k: int = Field(default=10, description="Number of results to return")
-
-class MultiSearchRequest(BaseModel):
-    queries: List[str]
-    strategy: str = Field(default="ensemble", description="Search strategy: semantic, lexical, hybrid, ensemble")
-    top_k: int = Field(default=10, description="Number of results to return")
 
 class DocumentChunk:
     def __init__(self, text: str, metadata: Dict[str, Any] = None):
@@ -1664,8 +1321,8 @@ class TextExtractionSystem:
 
             # Load prompt
             try:
-                prompt_template = load_prompt("prompts/phase2_prompt.txt")
-                logger.info("Loaded prompt from prompts/phase2_prompt.txt")
+                prompt_template = load_prompt("prompts/phase1_prompt.txt")
+                logger.info("Loaded prompt from prompts/phase1_prompt.txt")
             except FileNotFoundError:
                 logger.warning("Prompt file not found, using default")
                 prompt_template = """
@@ -1691,11 +1348,12 @@ class TextExtractionSystem:
             # ✅ Format the prompt using actual context and query
             #prompt = prompt_template.format(context=base_context, query=query)
             max_attempts = 5
-            keys = [GEMINI_API_KEY_PAID,GEMINI_API_KEY_1, GEMINI_API_KEY_2, GEMINI_API_KEY_3, GEMINI_API_KEY_4, GEMINI_API_KEY_5, GEMINI_API_KEY_6, GEMINI_API_KEY_7, GEMINI_API_KEY_8, GEMINI_API_KEY_9, GEMINI_API_KEY_10]
+            #keys = [GEMINI_API_KEY_PAID,GEMINI_API_KEY_1, GEMINI_API_KEY_2, GEMINI_API_KEY_3, GEMINI_API_KEY_4, GEMINI_API_KEY_5, GEMINI_API_KEY_6, GEMINI_API_KEY_7, GEMINI_API_KEY_8, GEMINI_API_KEY_9, GEMINI_API_KEY_10]
+            keys = [GEMINI_API_KEY_PAID]
             MODEL_FALLBACK_ORDER = ['gemini-2.5-flash', 'gemini-2.0-flash']
 
             intermediate_results = []
-
+            answers_history = []        
             for outer_attempt in range(max_attempts):
                 random.shuffle(keys)
                 for api_key in keys:
@@ -1714,6 +1372,8 @@ class TextExtractionSystem:
                                 full_context = current_context
                                 if intermediate_results:
                                     full_context += "\n\nIntermediate Results:\n" + "\n".join(intermediate_results)
+                                if answers_history:
+                                    full_context += "\n\nPrevious Answers:\n" + "\n".join(answers_history)
                                 api_result_str = "\n".join(intermediate_results) if intermediate_results else "None"
                                 prompt = prompt_template.format(context=full_context, query=prompt_query,api_response= api_result_str)
 
@@ -1734,7 +1394,10 @@ class TextExtractionSystem:
                                 except json.JSONDecodeError:
                                     logger.warning(f"❌ Could not parse Gemini response as JSON:\n{raw_text}")
                                     return raw_text
-
+                                # Store answer for next iteration context
+                                if "answer" in parsed and parsed["answer"]:
+                                    answers_history.append(f"Answer (step {step+1}): {parsed['answer']}")
+                                # Check if API call is needed
                                 need_api = parsed.get("need_api", False)
                                 if isinstance(need_api, str) and need_api.strip().lower() == "false":
                                     need_api = False
@@ -1757,21 +1420,15 @@ class TextExtractionSystem:
 
 
 # Global instances
-document_cache = DocumentCache()
+document_cache = DocumentCache(cache_dir=CACHE_DIR, logger=logger)
 system = TextExtractionSystem()
-
-# Utility functions
-def is_url(string: str) -> bool:
-    """Check if string is a URL"""
-    return string.startswith(('http://', 'https://'))
-
-
 
 def verify_token(authorization: str = None):
     """Simple token verification"""
     if authorization != BEARER_API_TOKEN:
         raise HTTPException(status_code=401, detail="Invalid authorization token")
     return True
+
 
 # API Router
 api_router = APIRouter(prefix="/api/v1")
