@@ -19,7 +19,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.routing import APIRouter
 from dotenv import load_dotenv
 import torch
-from utils import  extract_final_answer, clean_string_post, classify_url_by_response, clean_text_for_gemini,extract_json_from_response, is_url
+from utils import  (extract_final_answer, 
+                    clean_string_post, 
+                    classify_url_by_response, 
+                    clean_text_for_gemini,
+                    extract_json_from_response, 
+                    is_url)
 from cache import DocumentCache
 from models import (
     HackRxRunRequest,
