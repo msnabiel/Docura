@@ -2,8 +2,9 @@ pydantic
 requests
 Pillow
 pdf2image
+python-pptx==1.0.2
+pptx2txt2==1.1.0
 python-pptx
-pptx-extract
 python-dateutil
 google-generativeai
 httpx
@@ -16,3 +17,11 @@ python-dotenv
 torch
 PyMuPDF
 uvicorn
+PyPDF2
+python-docx
+pytesseract
+opencv-python
+beautifulsoup4
+pandas
+xlrd
+nltk
