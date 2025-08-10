@@ -5,46 +5,44 @@ import json
 import csv
 import email
 import logging
+import tempfile
+import fitz  # PyMuPDF
+import google.generativeai as genai
 import hashlib
 import zipfile
 import subprocess
 import requests
-from pptx import Presentation
 from PIL import Image
 from pdf2image import convert_from_path
-from pptx_extract import FastPPTXOCRExtractor
-from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import asyncio
-from functools import partial, lru_cache
+from functools import lru_cache
 import urllib.request
 from urllib.parse import urlparse
 from typing import Dict, Any, List, Optional, Tuple, Union, Protocol
 from dataclasses import dataclass, field
-from pathlib import Path
 import time
 from pptx.enum.shapes import MSO_SHAPE_TYPE
+from PyPDF2 import PdfReader
+from docx import Document
+from pptx import Presentation
+from PIL import Image
+import pytesseract
+import cv2
+from bs4 import BeautifulSoup
+import pandas as pd
+import xlrd
+import nltk
+import numpy as np
+from tempfile import NamedTemporaryFile
 from io import BytesIO
+from dotenv import load_dotenv
+from utils import clean_ocr_text
 
-# Core extraction libraries
-try:
-    from PyPDF2 import PdfReader
-    import fitz
-    from docx import Document
-    from pptx import Presentation
-    from PIL import Image
-    import pytesseract
-    import cv2
-    from bs4 import BeautifulSoup
-    import pandas as pd
-    import xlrd
-    import nltk
-    import numpy as np
-    from tempfile import NamedTemporaryFile
-    from io import BytesIO
-except ImportError as e:
-    logging.error(f"Missing required dependency: {e}")
-    raise
+# === Gemini Setup ===
+load_dotenv(dotenv_path=".env.local")
+GEMINI_API_KEY_PAID = os.getenv("GEMINI_API_KEY_PAID") # Replace with your Gemini API key
+genai.configure(api_key=GEMINI_API_KEY_PAID)
+model = genai.GenerativeModel("gemini-2.5-flash")
 
 # Configure logging
 logging.basicConfig(
@@ -226,6 +224,81 @@ class CacheManager:
         
         self.cache[cache_key] = result
         self.access_times[cache_key] = time.time()
+class FastPPTXOCRExtractor:
+    def __init__(self, dpi: int = 300, max_workers: int = 4):
+        self.dpi = dpi
+        self.max_workers = max_workers
+
+    def _extract_text_native(self, pptx_path: str) -> str:
+        prs = Presentation(pptx_path)
+        slides_text = []
+        for idx, slide in enumerate(prs.slides, 1):
+            slide_parts = [shape.text.strip() for shape in slide.shapes if hasattr(shape, "text") and shape.text.strip()]
+            if slide_parts:
+                slides_text.append(f"Slide {idx}:\n" + "\n".join(slide_parts))
+        return "\n\n".join(slides_text)
+
+    def _pptx_to_pdf(self, pptx_path: str, out_dir: str) -> str:
+        subprocess.run([
+            "soffice", "--headless", "--convert-to", "pdf", "--outdir", out_dir, pptx_path
+        ], check=True)
+        base_name = os.path.splitext(os.path.basename(pptx_path))[0] + ".pdf"
+        return os.path.join(out_dir, base_name)
+
+    def _pdf_to_images(self, pdf_path: str, out_dir: str) -> list[str]:
+        doc = fitz.open(pdf_path)
+        paths = []
+        for i, page in enumerate(doc, 1):
+            pix = page.get_pixmap(dpi=self.dpi)
+            img_path = os.path.join(out_dir, f"slide_{i}.png")
+            pix.save(img_path)
+            paths.append(img_path)
+        return paths
+
+    def _gemini_ocr_image(self, image_path: str, prompt: str = "Extract all text from this slide:") -> str:
+        with open(image_path, "rb") as f:
+            image_data = f.read()
+        response = model.generate_content([
+            {"mime_type": "image/png", "data": image_data},
+            prompt
+        ])
+        return clean_ocr_text(response.text)
+
+    def _gemini_pdf_extract(self, pdf_path: str, prompt: str = "Extract slide-wise text from this presentation:") -> str:
+        with open(pdf_path, "rb") as f:
+            pdf_data = f.read()
+        response = model.generate_content([
+            {"mime_type": "application/pdf", "data": pdf_data},
+            prompt
+        ])
+        return clean_ocr_text(response.text)
+
+    def _parallel_ocr_images(self, image_paths: list[str]) -> list[str]:
+        results = []
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            futures = [executor.submit(self._gemini_ocr_image, path) for path in image_paths]
+            for future in as_completed(futures):
+                try:
+                    results.append(future.result())
+                except Exception as e:
+                    results.append(f"[ERROR] {e}")
+        return results
+
+    def extract_text_from_pptx_slides(self, pptx_path: str) -> list[str]:
+        with tempfile.TemporaryDirectory() as tmp:
+            native_text = self._extract_text_native(pptx_path)
+            pdf_path = self._pptx_to_pdf(pptx_path, tmp)
+
+            try:
+                print("🔍 Using Gemini Vision Pro on full PDF...")
+                gemini_text = self._gemini_pdf_extract(pdf_path)
+                return [native_text, gemini_text]
+            except Exception as e:
+                print(f"⚠️ Gemini PDF extract failed: {e}")
+                print("🔄 Falling back to image-based OCR...")
+                images = self._pdf_to_images(pdf_path, tmp)
+                ocr_texts = self._parallel_ocr_images(images)
+                return [native_text] + ocr_texts
 
 class PDFExtractor:
     """Optimized PDF extractor with better error handling"""

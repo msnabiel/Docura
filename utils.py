@@ -1,7 +1,7 @@
 import re
 import json
 import requests
-
+from typing import Optional
 # ------------------------------- CLEANING FUNCTIONS -------------------------------
 def clean_string_post(text: str) -> str:
     """
@@ -51,6 +51,17 @@ def clean_text_for_gemini(raw_text: str) -> str:
     # Capitalize first letter of the paragraph
     text = text[0].upper() + text[1:] if text else ""
 
+    return text.strip()
+
+# === Utility: Clean OCR Text ===
+def clean_ocr_text(text: Optional[str]) -> str:
+    if not text:
+        return ""
+    text = re.sub(r'-\n', '', text)
+    text = re.sub(r'\s*\n\s*', ' ', text)
+    text = re.sub(r'\s+', ' ', text)
+    text = re.sub(r'(\*\*|__)(.*?)\1', r'\2', text)
+    text = re.sub(r'(\*|_)(.*?)\1', r'\2', text)
     return text.strip()
 
 # ------------------------------- EXTRACTING FROM JSON FUNCTIONS -------------------------------
