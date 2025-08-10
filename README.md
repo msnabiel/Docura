@@ -33,16 +33,16 @@ _This site includes interactive UI, API documentation, and step-by-step guides._
 
 ## Project Structure
 ```
-├── main.py            # FastAPI app entry point
-├── embeddings/        # Multi-embedding models
-├── retrieval/         # FAISS + BM25 + RFF
-├── agents/            # Agentic reasoning
-├── api/               # FastAPI endpoints
-├── .env.example
-├── requirements.txt   # Dependencies
-├── images/
-├── data/              # Sample documents
-└── tests/             # Unit tests
+├── main.py                 # FastAPI app entry point
+├── cache.py                 # Cache handling logic
+├── models.py                # Model definitions / configurations
+├── text_extractor.py        # Text extraction pipeline
+├── utils.py                 # Utility functions
+├── requirements.txt         # Project dependencies
+├── Dockerfile               # Docker image definition
+├── README.md                # Project documentation
+├── images/                  # Image assets
+└── prompts/                 # Prompt templates
 ```
 
 ## 📊 Retrieval Components
