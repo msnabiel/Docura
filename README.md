@@ -6,8 +6,11 @@ Docura is an advanced **Retrieval-Augmented Generation (RAG)** pipeline with **a
 The frontend source code can be found here: [Docura-AI Frontend Repository](https://github.com/msnabiel/Docura-AI)
 
 
-**Note:** This repository is dockerized you can pull at docker pull msnabiel/docura
+**Note:** This repository is **dockerized**. You can pull the pre-built image below, or see the instructions after that to build it yourself.
+```bash
+docker pull msnabiel/docura
 docker run -d -p 8000:8000 msnabiel/docura
+```
 
 
 ## 📌 **Live Demo & Documentation**
@@ -91,8 +94,10 @@ http://localhost:8000
 ```
 
 ## Docker Build
+```bash 
 docker build -t docura .
 docker run -d -p 8000:8000 docura
+```
 
 ## 📈 Performance Metrics & USP
 
