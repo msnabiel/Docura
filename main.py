@@ -13,10 +13,11 @@ import faiss
 from sentence_transformers import SentenceTransformer
 from rank_bm25 import BM25Okapi
 import google.generativeai as genai
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, UploadFile, File
 from fastapi.responses import Response, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.routing import APIRouter
+from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 import torch
 from utils import  (extract_final_answer, 
@@ -1437,6 +1438,41 @@ def verify_token(authorization: str = None):
 
 # API Router
 api_router = APIRouter(prefix="/api/v1")
+
+@api_router.post("/upload")
+async def upload_file(file: UploadFile = File(...)):
+    """Upload a file and return its local URL"""
+    try:
+        logger.info(f"Uploading file: {file.filename}")
+        
+        # Create upload directory if it doesn't exist
+        os.makedirs(UPLOAD_DIR, exist_ok=True)
+        
+        # Generate a unique filename
+        import uuid
+        file_extension = os.path.splitext(file.filename)[1] if file.filename else ""
+        unique_filename = f"{uuid.uuid4()}{file_extension}"
+        file_path = os.path.join(UPLOAD_DIR, unique_filename)
+        
+        # Save the file
+        with open(file_path, "wb") as buffer:
+            content = await file.read()
+            buffer.write(content)
+        
+        # Return the local file URL
+        file_url = f"file://{os.path.abspath(file_path)}"
+        
+        logger.info(f"File uploaded successfully: {file_url}")
+        return {
+            "url": file_url,
+            "filename": file.filename,
+            "size": len(content),
+            "status": "success"
+        }
+    
+    except Exception as e:
+        logger.error(f"Error uploading file: {e}")
+        raise HTTPException(status_code=500, detail=f"Upload error: {e}")
 
 @api_router.get("/health")
 async def health_check():
