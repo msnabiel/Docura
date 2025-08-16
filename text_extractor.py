@@ -719,36 +719,60 @@ class EnhancedTextExtractionService:
     
     def extract_text_from_url(self, url: str, 
                              cleaning_options: Optional[CleaningOptions] = None) -> ExtractionResult:
-        """Download and extract text from URL — skips .bin files"""
+        """Download and extract text from URL or local file — skips .bin files"""
         try:
-            logger.info(f"Preparing to download from URL: {url}")
+            logger.info(f"Preparing to extract from URL: {url}")
             
-            # Extract filename from URL before downloading
-            parsed_url = urlparse(url)
-            filename = os.path.basename(parsed_url.path) or "document"
+            # Handle local file URLs
+            if url.startswith('file://'):
+                file_path = url[7:]  # Remove 'file://' prefix
+                if not os.path.exists(file_path):
+                    return ExtractionResult(
+                        text="",
+                        metadata={"source_url": url},
+                        success=False,
+                        error=f"Local file not found: {file_path}"
+                    )
+                
+                # Read local file
+                with open(file_path, 'rb') as f:
+                    file_bytes = f.read()
+                
+                filename = os.path.basename(file_path)
+                logger.info(f"Reading local file: {filename}")
+                
+            else:
+                # Handle remote URLs
+                parsed_url = urlparse(url)
+                filename = os.path.basename(parsed_url.path) or "document"
 
-            # Early exit if file appears to be a .bin
-            if filename.lower().endswith('.bin'):
-                return ValueError("Skipping download: '.bin' files are not supported for text extraction.")
+                # Early exit if file appears to be a .bin
+                if filename.lower().endswith('.bin'):
+                    return ExtractionResult(
+                        text="",
+                        metadata={"source_url": url},
+                        success=False,
+                        error="Skipping download: '.bin' files are not supported for text extraction."
+                    )
 
-            # Download with timeout and user agent
-            req = urllib.request.Request(
-                url,
-                headers={'User-Agent': 'Mozilla/5.0 (compatible; TextExtractor/1.0)'}
-            )
-            
-            with urllib.request.urlopen(req, timeout=30) as response:
-                file_bytes = response.read()
+                # Download with timeout and user agent
+                req = urllib.request.Request(
+                    url,
+                    headers={'User-Agent': 'Mozilla/5.0 (compatible; TextExtractor/1.0)'}
+                )
+                
+                with urllib.request.urlopen(req, timeout=30) as response:
+                    file_bytes = response.read()
 
-                # Guess extension if missing
-                if '.' not in filename:
-                    content_type = response.headers.get('content-type', '').lower()
-                    if 'pdf' in content_type:
-                        filename += '.pdf'
-                    elif 'image' in content_type:
-                        filename += '.jpg'
-                    else:
-                        filename += '.txt'
+                    # Guess extension if missing
+                    if '.' not in filename:
+                        content_type = response.headers.get('content-type', '').lower()
+                        if 'pdf' in content_type:
+                            filename += '.pdf'
+                        elif 'image' in content_type:
+                            filename += '.jpg'
+                        else:
+                            filename += '.txt'
 
             # Extract text from bytes
             result = self.extract_text_from_bytes(file_bytes, filename, cleaning_options)
