@@ -97,6 +97,7 @@ load_dotenv(dotenv_path=".env.local")
 #GEMINI_API_KEY_9 = os.getenv("GEMINI_API_KEY_9")
 #GEMINI_API_KEY_10 = os.getenv("GEMINI_API_KEY_10")
 GEMINI_API_KEY_PAID = os.getenv("GEMINI_API_KEY_PAID")
+client = google.genai.Client(api_key=GEMINI_API_KEY_PAID)
 
 # Validate API keys and create a list of valid keys
 def get_valid_gemini_keys():
@@ -137,9 +138,18 @@ genai.configure(api_key=GEMINI_API_KEY_PAID)
 def load_prompt(file_path: str) -> str:
     with open(file_path, "r", encoding="utf-8") as f:
         return f.read()
+    
 system_prompt = load_prompt("prompts/system_prompt.txt")
+"""cache_system_prompt = client.caches.create(
+    model="gemini-2.5-flash",
+    config=types.CreateCachedContentConfig(
+        system_instruction=system_prompt
+    )
+)"""
+#generation_config["cached_content"] = cache_system_prompt.name
 generation_config['system_instruction'] = system_prompt
-print(generation_config)
+
+#print(generation_config)
 generation_config = types.GenerateContentConfig(**generation_config)
 class DocumentChunk:
     def __init__(self, text: str, metadata: Dict[str, Any] = None):
@@ -1373,14 +1383,15 @@ class TextExtractionSystem:
                 for api_key in keys:
                     key_label = f"KEY_{keys.index(api_key) + 1}"
                     logger.info(f"Attempt {outer_attempt + 1}: Trying Gemini key: {key_label}")
-                    genai.configure(api_key=api_key)
+                    #Old method
+                    #genai.configure(api_key=api_key)
                     # New method
                     client = google.genai.Client(api_key=api_key)
                     for model_name in MODEL_FALLBACK_ORDER:
                         try:
                             logger.info(f"Trying model: {model_name}")
                             # Old method
-                            model = genai.GenerativeModel(model_name)
+                            #model = genai.GenerativeModel(model_name)
                             
                             current_context = base_context
                             prompt_query = query
