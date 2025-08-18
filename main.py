@@ -470,6 +470,28 @@ class TextExtractionSystem:
         except Exception as e:
             logger.error(f"Error processing local file: {e}")
             raise HTTPException(status_code=500, detail=f"Local file processing error: {e}")
+    def _dynamic_resize(self, chunks: List[DocumentChunk],
+                        min_chunk_size: int = 150,
+                        max_chunk_size: int = 512) -> List[DocumentChunk]:
+        """
+        Dynamically resize chunks between min and max token size.
+        """
+        adjusted = []
+        for chunk in chunks:
+            tokens = chunk.text.split()
+            if len(tokens) > max_chunk_size:
+                # break into sub-chunks
+                for i in range(0, len(tokens), max_chunk_size):
+                    sub_text = " ".join(tokens[i:i+max_chunk_size])
+                    new_chunk = DocumentChunk(text=sub_text,
+                                            metadata={**chunk.metadata, "resized": True})
+                    adjusted.append(new_chunk)
+            elif len(tokens) < min_chunk_size:
+                # keep small ones for now, filtering happens later
+                adjusted.append(chunk)
+            else:
+                adjusted.append(chunk)
+        return adjusted
     
     def chunk_text(self, text: str) -> List[DocumentChunk]:
         """Enhanced text chunking with multiple strategies"""
@@ -491,8 +513,16 @@ class TextExtractionSystem:
         # Remove duplicates and sort by position
         unique_chunks = self._deduplicate_chunks(chunks)
         unique_chunks.sort(key=lambda x: x.metadata.get("start_idx", 0))
+
+        # 🔹 Apply dynamic chunk resizing
+        resized_chunks = self._dynamic_resize(unique_chunks)
+
+         # 🔹 Drop chunks below threshold score
+        score_threshold = 0.35
+        filtered_chunks = [c for c in resized_chunks
+                        if getattr(c, "semantic_score", 1.0) >= score_threshold]
         
-        return unique_chunks
+        return filtered_chunks
     
     def _semantic_chunking(self, text: str) -> List[DocumentChunk]:
         """Chunk text based on semantic boundaries (sentences)"""
