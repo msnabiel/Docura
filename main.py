@@ -472,7 +472,7 @@ class TextExtractionSystem:
             raise HTTPException(status_code=500, detail=f"Local file processing error: {e}")
     def _dynamic_resize(self, chunks: List[DocumentChunk],
                         min_chunk_size: int = 150,
-                        max_chunk_size: int = 512) -> List[DocumentChunk]:
+                        max_chunk_size: int = CHUNK_SIZE) -> List[DocumentChunk]:
         """
         Dynamically resize chunks between min and max token size.
         """
@@ -485,6 +485,7 @@ class TextExtractionSystem:
                     sub_text = " ".join(tokens[i:i+max_chunk_size])
                     new_chunk = DocumentChunk(text=sub_text,
                                             metadata={**chunk.metadata, "resized": True})
+                    #new_chunk.semantic_score = chunk.semantic_score
                     adjusted.append(new_chunk)
             elif len(tokens) < min_chunk_size:
                 # keep small ones for now, filtering happens later
@@ -516,13 +517,11 @@ class TextExtractionSystem:
 
         # 🔹 Apply dynamic chunk resizing
         resized_chunks = self._dynamic_resize(unique_chunks)
-
-         # 🔹 Drop chunks below threshold score
-        score_threshold = 0.35
-        filtered_chunks = [c for c in resized_chunks
-                        if getattr(c, "semantic_score", 1.0) >= score_threshold]
+        print("\n=== Chunk Scores ===")
+        for i, c in enumerate(resized_chunks, 1):
+            print(f"Chunk {i} | Score: {c.semantic_score:.3f} | Text preview: {c.text[:60]}...")
         
-        return filtered_chunks
+        return resized_chunks
     
     def _semantic_chunking(self, text: str) -> List[DocumentChunk]:
         """Chunk text based on semantic boundaries (sentences)"""
@@ -879,6 +878,8 @@ class TextExtractionSystem:
                     search_strategy="semantic"
                 )
                 results.append(result)
+                logger.info(f"Chunk {idx} | Score: {score:.3f} | Text preview: {chunk.text[:50]}")
+
 
         return results
 
@@ -905,7 +906,7 @@ class TextExtractionSystem:
         
         return results
     
-    def ensemble_search(self, query: str, top_k: int = 10) -> List[SearchResult]:
+    def ensemble_search(self, query: str, top_k: int = 10, score_threshold: float = 0.1) -> List[SearchResult]:
         """Ensemble search using multiple embedding models"""
         start_time = time.time()
         if not self.faiss_index or not self.bm25:
@@ -947,7 +948,8 @@ class TextExtractionSystem:
                 search_strategy="ensemble"
             )
             results.append(result)
-        
+            logger.info(f"Chunk {chunk_id} | Score: {final_score:.3f} | Text preview: {data['chunk'].text[:50]}")
+
         # Sort by final score and return top-k
         results.sort(key=lambda x: x.combined_score, reverse=True)
         logger.info(f"Ensemble search took {time.time() - start_time:.2f} seconds")
@@ -1446,6 +1448,7 @@ class TextExtractionSystem:
                                 #    contents=prompt
                                 #)
                                 # With asyncio
+                                logger.info(f"Context:\n{prompt}")
                                 response = await asyncio.to_thread(
                                     client.models.generate_content,
                                     model=model_name,
