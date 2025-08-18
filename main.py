@@ -35,7 +35,8 @@ from models import (
     MultiSearchRequest,
     IngestionResult
 )
-
+from google.genai import types
+import google
 from config import (
     generation_config
 )
@@ -136,7 +137,10 @@ genai.configure(api_key=GEMINI_API_KEY_PAID)
 def load_prompt(file_path: str) -> str:
     with open(file_path, "r", encoding="utf-8") as f:
         return f.read()
-
+system_prompt = load_prompt("prompts/system_prompt.txt")
+generation_config['system_instruction'] = system_prompt
+print(generation_config)
+generation_config = types.GenerateContentConfig(**generation_config)
 class DocumentChunk:
     def __init__(self, text: str, metadata: Dict[str, Any] = None):
         self.text = text
@@ -1370,13 +1374,17 @@ class TextExtractionSystem:
                     key_label = f"KEY_{keys.index(api_key) + 1}"
                     logger.info(f"Attempt {outer_attempt + 1}: Trying Gemini key: {key_label}")
                     genai.configure(api_key=api_key)
+                    # New method
+                    client = google.genai.Client(api_key=api_key)
                     for model_name in MODEL_FALLBACK_ORDER:
                         try:
                             logger.info(f"Trying model: {model_name}")
+                            # Old method
                             model = genai.GenerativeModel(model_name)
+                            
                             current_context = base_context
                             prompt_query = query
-
+                            
                             # Loop until need_api == false
                             for step in range(5):  # limit to avoid infinite loops
                                 full_context = current_context
@@ -1388,7 +1396,12 @@ class TextExtractionSystem:
                                 prompt = prompt_template.format(context=full_context, query=prompt_query,api_response= api_result_str)
 
                                 logger.info(f"Gemini loop step {step + 1}, model: {model_name}")
-                                response = await asyncio.to_thread(model.generate_content, prompt,generation_config=generation_config)
+                                #response = await asyncio.to_thread(model.generate_content, prompt,generation_config=generation_config,system_prompt=system_prompt)
+                                response = client.models.generate_content(
+                                    model=model_name,
+                                    config=generation_config,
+                                    contents=prompt
+                                )
                                 #response = await client.aio.models.generate_content(
                                             #model=model_name,       # e.g., "gemini-2.0-flash"
                                             #contents=prompt         # your formatted prompt)
