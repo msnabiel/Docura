@@ -36,7 +36,9 @@ from models import (
     IngestionResult
 )
 
-
+from config import (
+    generation_config
+)
 # Import the direct text extraction functions
 from text_extractor import (
     extract_text_from_url, 
@@ -50,6 +52,7 @@ import logging
 # Simple logging setup that definitely works
 log_dir = "logs"
 os.makedirs(log_dir, exist_ok=True)
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -1122,16 +1125,17 @@ class TextExtractionSystem:
                         }
                         document_cache.set(input_source, cache_data)
                                 
-                    elif os.path.exists(input_source):
-                        logger.info(f"📄 Processing local file: {input_source}")
-                        
-                        # Read file bytes and use direct extraction
-                        with open(input_source, 'rb') as f:
+                    elif input_source.startswith("file://") or os.path.exists(input_source):
+                        # normalize local file path
+                        local_path = input_source.replace("file:/", "")
+                        logger.info(f"📄 Processing local file: {local_path}")
+
+                        with open(local_path, 'rb') as f:
                             file_bytes = f.read()
-                        
+
                         text, metadata = extract_text_from_bytes(
                             file_bytes,
-                            os.path.basename(input_source),
+                            os.path.basename(local_path),
                             enable_ocr=True,
                             cleaning_options=CleaningOptions(
                                 normalize_unicode=True,
@@ -1144,14 +1148,14 @@ class TextExtractionSystem:
                                 aggressive_cleaning=True
                             )
                         )
-                        
-                        # Cache the result
+
                         cache_data = {
                             "text": text,
                             "metadata": metadata,
                             "processing_time": metadata.get('processing_time', 0)
                         }
                         document_cache.set(input_source, cache_data)
+
                     else:
                         logger.error(f"Invalid input: {input_source}")
                         return []
@@ -1384,7 +1388,7 @@ class TextExtractionSystem:
                                 prompt = prompt_template.format(context=full_context, query=prompt_query,api_response= api_result_str)
 
                                 logger.info(f"Gemini loop step {step + 1}, model: {model_name}")
-                                response = await asyncio.to_thread(model.generate_content, prompt)
+                                response = await asyncio.to_thread(model.generate_content, prompt,generation_config=generation_config)
                                 #response = await client.aio.models.generate_content(
                                             #model=model_name,       # e.g., "gemini-2.0-flash"
                                             #contents=prompt         # your formatted prompt)
@@ -1460,7 +1464,7 @@ async def upload_file(file: UploadFile = File(...)):
             buffer.write(content)
         
         # Return the local file URL
-        file_url = f"file://{os.path.abspath(file_path)}"
+        file_url = f"file:/{os.path.abspath(file_path)}"
         
         logger.info(f"File uploaded successfully: {file_url}")
         return {

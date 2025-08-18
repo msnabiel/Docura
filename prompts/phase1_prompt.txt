@@ -50,31 +50,7 @@ Question: What is my flight number?
 Context and API responses: Favourite city, Hyderabad whose Landmark is Taj Mahal, Flight number 12345.
 Answer : Your flight number for your favourite city, Hyderabad, is 12345.
 
-Return ONLY this JSON (no markdown, no extra text):
-{{
-  "answer": "combine answers into key-word rich, descriptive,string",
-  "confidence_score": <float between 0 and 1>,
-  "need_api": false | {{
-    "type": "GET" | "POST",
-    "url": "<api or webpage URL>",
-    "headers": <optional>,
-    "body": <optional>
-  }}
-}}
-
 Inputs:
 - User Query: {query}
 - Context from vector DB: {context}
 - Previous API Response: {api_response}
-
-Return ONLY this JSON (no markdown, no extra text):
-{{
-  "answer": "combine answers into key-word rich, descriptive, brief and clear string",
-  "confidence_score": <float between 0 and 1>,
-  "need_api": false | {{
-    "type": "GET" | "POST",
-    "url": "<api or webpage URL>",
-    "headers": <optional>,
-    "body": <optional>
-  }}
-}}

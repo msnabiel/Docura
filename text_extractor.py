@@ -552,9 +552,9 @@ class PDFExtractor:
                     for page_num in range(doc.page_count)
                 }
                 
-                for future in as_completed(futures, timeout=300):  # 5 minute total timeout
+                for future in as_completed(futures, timeout=600):  # 5 minute total timeout
                     try:
-                        result = future.result(timeout=60)  # 1 minute per page
+                        result = future.result(timeout=120)  # 1 minute per page
                         results.append(result)
                     except Exception as e:
                         page_num = futures[future]
