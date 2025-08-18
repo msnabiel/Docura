@@ -1396,12 +1396,22 @@ class TextExtractionSystem:
                                 prompt = prompt_template.format(context=full_context, query=prompt_query,api_response= api_result_str)
 
                                 logger.info(f"Gemini loop step {step + 1}, model: {model_name}")
+                                # Old method
                                 #response = await asyncio.to_thread(model.generate_content, prompt,generation_config=generation_config,system_prompt=system_prompt)
-                                response = client.models.generate_content(
+                                # Without asyncio
+                                #response = client.models.generate_content(
+                                #    model=model_name,
+                                #    config=generation_config,
+                                #    contents=prompt
+                                #)
+                                # With asyncio
+                                response = await asyncio.to_thread(
+                                    client.models.generate_content,
                                     model=model_name,
                                     config=generation_config,
                                     contents=prompt
                                 )
+
                                 #response = await client.aio.models.generate_content(
                                             #model=model_name,       # e.g., "gemini-2.0-flash"
                                             #contents=prompt         # your formatted prompt)
