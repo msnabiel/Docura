@@ -11,6 +11,7 @@ import asyncio
 from contextlib import asynccontextmanager
 import numpy as np
 import faiss
+from intro import intro
 from sentence_transformers import SentenceTransformer
 from rank_bm25 import BM25Okapi
 import google.generativeai as genai
@@ -36,6 +37,7 @@ from models import (
     MultiSearchRequest,
     IngestionResult
 )
+
 from google.genai import types
 import google
 from config import (
@@ -73,6 +75,9 @@ logger.info("=== LOGGING SYSTEM INITIALIZED ===")
 logger.info(f"Log file: app.log")
 logger.info(f"Log level: {logging.getLevelName(logger.level)}")
 logger.info("=== LOGGING SYSTEM READY ===\n")
+# Add this import at the top of your file:
+# from colorama import init, Fore, Style
+intro()
 
 # GPU detection and optimization
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -125,7 +130,7 @@ OVERLAP_SIZE = 50
 SEMANTIC_THRESHOLD_CHUNK_SCORE = 0.25
 ENSEMBLE_THRESHOLD_SCORE = 0.00
 JACCARD_SIMILARITY_THRESHOLD = 0.85
-CONTAINED_RATIO = 0.9
+CONTAINED_RATIO = 0.85
 # Embedding optimization settings
 EMBEDDING_BATCH_SIZE = 64 if DEVICE == "cuda" else 32  # Larger batches for GPU
 EMBEDDING_WORKERS = 2 if DEVICE == "cuda" else 4  # Fewer workers for GPU to avoid memory issues

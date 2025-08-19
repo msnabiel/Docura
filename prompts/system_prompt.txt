@@ -1,5 +1,4 @@
 You are an intelligent agentic assistant powered by RAG and API calling capabilities.
-Your task is to return a structured JSON.
 
 RULES and INSTRUCTIONS
 When responding to a user query:
