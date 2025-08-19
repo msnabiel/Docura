@@ -2,6 +2,7 @@ import os
 import json
 import time
 import re
+import hashlib
 import random
 import httpx
 from typing import List, Union, Dict, Any
@@ -133,7 +134,6 @@ EMBEDDING_WORKERS = 2 if DEVICE == "cuda" else 4  # Fewer workers for GPU to avo
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(CACHE_DIR, exist_ok=True)
 
-
 # Configure Gemini
 genai.configure(api_key=GEMINI_API_KEY_PAID)
 def load_prompt(file_path: str) -> str:
@@ -173,6 +173,189 @@ class SearchResult:
         self.combined_score = combined_score
         self.search_strategy = search_strategy
         self.rank = 0
+        
+def find_overlap(a: str, b: str, min_overlap: int = 5) -> int:
+    """
+    Find the length of the maximum suffix of 'a' that matches a prefix of 'b'.
+    Returns the length of the overlap (0 if none).
+    """
+    max_len = min(len(a), len(b))
+    for i in range(max_len, min_overlap - 1, -1):
+        if a.endswith(b[:i]):
+            return i
+    return 0
+
+def _tokenize_for_similarity(text: str) -> set:
+    tokens = re.findall(r"\w+", text.lower())
+    return set(tokens)
+
+def _jaccard_similarity(a: str, b: str) -> float:
+    set_a = _tokenize_for_similarity(a)
+    set_b = _tokenize_for_similarity(b)
+    if not set_a and not set_b:
+        return 1.0
+    if not set_a or not set_b:
+        return 0.0
+    intersection = len(set_a & set_b)
+    union = len(set_a | set_b)
+    return intersection / union if union else 0.0
+
+def _is_contained_with_ratio(a: str, b: str, min_ratio: float = 0.9) -> bool:
+    # True if the shorter string is contained within the longer string
+    if not a or not b:
+        return False
+    if len(a) < len(b):
+        shorter, longer = a, b
+    else:
+        shorter, longer = b, a
+    if shorter in longer:
+        return (len(shorter) / max(1, len(longer))) >= min_ratio
+    return False
+
+def merge_chunks(chunks: List[DocumentChunk], min_overlap: int = 5) -> List[DocumentChunk]:
+    """
+    Merge chunks if they overlap by at least `min_overlap` characters.
+    Logs merges and discards.
+    """
+    texts = [c.text for c in chunks]
+    merged = True
+
+    while merged:
+        merged = False
+        new_texts = []
+        skip = set()
+
+        for i in range(len(texts)):
+            if i in skip:
+                continue
+            merged_text = texts[i]
+
+            for j in range(i + 1, len(texts)):
+                if j in skip:
+                    continue
+
+                t2 = texts[j]
+
+                # Containment check (keep longer)
+                if _is_contained_with_ratio(merged_text, t2, min_ratio=0.9):
+                    if len(t2) > len(merged_text):
+                        merged_text = t2
+                    skip.add(j)
+                    merged = True
+                    logger.info("🧹 Dedup by containment")
+                    continue
+
+                # High-similarity check via Jaccard (near-duplicates)
+                jacc = _jaccard_similarity(merged_text, t2)
+                if jacc >= 0.92:
+                    if len(t2) > len(merged_text):
+                        merged_text = t2
+                    skip.add(j)
+                    merged = True
+                    logger.info(f"🧹 Dedup by Jaccard ≈ {jacc:.2f}")
+                    continue
+
+                overlap = find_overlap(merged_text, t2, min_overlap)
+                logger.info(f"Checking overlap: '{merged_text[-20:]}' ⟷ '{texts[j][:20]}' | Overlap={overlap}")
+
+                if overlap > 0:
+                    logger.info(f"➡️ Merging '{merged_text[-20:]}' + '{texts[j][:20]}' (overlap={overlap})")
+                    merged_text = merged_text + t2[overlap:]
+                    skip.add(j)
+                    merged = True
+                    logger.info(f"🗑️ Discarding chunk {j} (fully merged into another)")
+                else:
+                    overlap = find_overlap(t2, merged_text, min_overlap)
+                    logger.info(f"Checking reverse overlap: '{t2[-20:]}' ⟷ '{merged_text[:20]}' | Overlap={overlap}")
+
+                    if overlap > 0:
+                        logger.info(f"➡️ Merging '{t2[-20:]}' + '{merged_text[:20]}' (overlap={overlap})")
+                        merged_text = t2 + merged_text[overlap:]
+                        skip.add(j)
+                        merged = True
+                        logger.info(f"🗑️ Discarding chunk {j} (fully merged into another)")
+
+            new_texts.append(merged_text)
+
+        texts = new_texts
+
+    return [DocumentChunk(t) for t in texts]
+
+def merge_chunks_search(results: List[SearchResult], min_overlap: int = 5) -> List[SearchResult]:
+    """
+    Merge SearchResult chunks if they overlap by at least `min_overlap` characters.
+    Keeps the highest combined_score when merging.
+    """
+    texts = [(r.chunk.text, r.combined_score, r) for r in results]
+    merged = True
+
+    while merged:
+        merged = False
+        new_texts = []
+        skip = set()
+
+        for i in range(len(texts)):
+            if i in skip:
+                continue
+            merged_text, merged_score, orig_result = texts[i]
+
+            for j in range(i + 1, len(texts)):
+                if j in skip:
+                    continue
+
+                t2, score2, _ = texts[j]
+
+                # Containment check (keep longer, best score)
+                if _is_contained_with_ratio(merged_text, t2, min_ratio=0.9):
+                    if len(t2) > len(merged_text):
+                        merged_text = t2
+                    merged_score = max(merged_score, score2)
+                    skip.add(j)
+                    merged = True
+                    continue
+
+                # High-similarity check via Jaccard (near-duplicates)
+                jacc = _jaccard_similarity(merged_text, t2)
+                if jacc >= 0.92:
+                    if len(t2) > len(merged_text):
+                        merged_text = t2
+                    merged_score = max(merged_score, score2)
+                    skip.add(j)
+                    merged = True
+                    continue
+
+                # Forward overlap
+                overlap = find_overlap(merged_text, t2, min_overlap)
+                if overlap > 0:
+                    logger.info(f"➡️ Merging '{merged_text[-20:]}' + '{t2[:20]}' (overlap={overlap})")
+                    merged_text = merged_text + t2[overlap:]
+                    merged_score = max(merged_score, score2)  # keep best score
+                    skip.add(j)
+                    merged = True
+                    continue
+
+                # Reverse overlap
+                overlap = find_overlap(t2, merged_text, min_overlap)
+                if overlap > 0:
+                    logger.info(f"➡️ Merging '{t2[-20:]}' + '{merged_text[:20]}' (overlap={overlap})")
+                    merged_text = t2 + merged_text[overlap:]
+                    merged_score = max(merged_score, score2)
+                    skip.add(j)
+                    merged = True
+
+            # Create new SearchResult with merged text
+            new_result = SearchResult(
+                chunk=DocumentChunk(merged_text),
+                combined_score=merged_score,
+                search_strategy=orig_result.search_strategy
+            )
+            # Assign a stable chunk_id based on text to improve downstream deduplication if needed
+            new_result.chunk.chunk_id = f"merged_{hashlib.md5(merged_text.encode('utf-8')).hexdigest()[:8]}"
+            new_texts.append((merged_text, merged_score, new_result))
+
+        texts = new_texts
+
+    return [t[2] for t in texts]
 
 class TextExtractionSystem:
     def __init__(self):
@@ -519,10 +702,12 @@ class TextExtractionSystem:
         # 🔹 Apply dynamic chunk resizing
         resized_chunks = self._dynamic_resize(unique_chunks)
         print("\n=== Chunk Scores ===")
-        for i, c in enumerate(resized_chunks, 1):
-            print(f"Chunk {i} | Score: {c.semantic_score:.3f} | Text preview: {c.text[:60]}...")
-        
-        return resized_chunks
+        """for i, c in enumerate(resized_chunks, 1):
+            print(f"Chunk {i} | Score: {c.semantic_score:.3f} | Text preview: {c.text[:60]}...")"""
+        # ✅ Merge overlapping/similar chunks
+        merged_chunks = merge_chunks(resized_chunks, min_overlap=5)
+        logger.info(f"📌 Merged chunks: input={len(resized_chunks)} → output={len(merged_chunks)}")
+        return merged_chunks
     
     def _semantic_chunking(self, text: str) -> List[DocumentChunk]:
         """Chunk text based on semantic boundaries (sentences)"""
@@ -659,14 +844,39 @@ class TextExtractionSystem:
     
     def _deduplicate_chunks(self, chunks: List[DocumentChunk]) -> List[DocumentChunk]:
         """Remove duplicate chunks based on content similarity"""
-        unique_chunks = []
-        seen_texts = set()
+        unique_chunks: List[DocumentChunk] = []
         
         for chunk in chunks:
-            # Normalize text for comparison
-            normalized_text = chunk.text.strip().lower()
-            if normalized_text not in seen_texts and len(normalized_text) > 10:
-                seen_texts.add(normalized_text)
+            candidate_text = chunk.text.strip()
+            if len(candidate_text) <= 10:
+                continue
+            skip_add = False
+            replace_index = None
+            
+            for idx, existing in enumerate(unique_chunks):
+                existing_text = existing.text.strip()
+                # Exact match
+                if candidate_text.lower() == existing_text.lower():
+                    skip_add = True
+                    break
+                # Containment deduplication (prefer longer)
+                if _is_contained_with_ratio(candidate_text, existing_text, min_ratio=0.9):
+                    if len(candidate_text) > len(existing_text):
+                        replace_index = idx
+                    else:
+                        skip_add = True
+                    break
+                # High Jaccard similarity (near-duplicate)
+                if _jaccard_similarity(candidate_text, existing_text) >= 0.92:
+                    if len(candidate_text) > len(existing_text):
+                        replace_index = idx
+                    else:
+                        skip_add = True
+                    break
+            
+            if replace_index is not None:
+                unique_chunks[replace_index] = chunk
+            elif not skip_add:
                 unique_chunks.append(chunk)
         
         return unique_chunks
@@ -956,7 +1166,9 @@ class TextExtractionSystem:
                 #logger.info(f"Chunk {chunk_id} | Score: {final_score:.3f} | Text preview: {data['chunk'].text[:50]}")
             #logger.info(f"Chunk {chunk_id} | Score: {final_score:.3f} | Text preview: {data['chunk'].text[:50]}")
             #logger.info(f"Chunk {chunk_id} | Score: {final_score:.3f} | Text preview: {chunk.text[:50]}")
-        
+
+        # 🔹 Merge duplicates / overlapping chunks
+        results = merge_chunks_search(results)
         # Sort by final score and return top-k
         results.sort(key=lambda x: x.combined_score, reverse=True)
         logger.info(f"Ensemble search took {time.time() - start_time:.2f} seconds")
@@ -2029,5 +2241,5 @@ if __name__ == "__main__":
         host="0.0.0.0", 
         port=8000, 
         log_config=None,  # Use our custom logging config
-        access_log=True
+        access_log=True,
     )
