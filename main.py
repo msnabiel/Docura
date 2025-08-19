@@ -124,6 +124,8 @@ CHUNK_SIZE = 512
 OVERLAP_SIZE = 50
 SEMANTIC_THRESHOLD_CHUNK_SCORE = 0.25
 ENSEMBLE_THRESHOLD_SCORE = 0.00
+JACCARD_SIMILARITY_THRESHOLD = 0.85
+CONTAINED_RATIO = 0.9
 # Embedding optimization settings
 EMBEDDING_BATCH_SIZE = 64 if DEVICE == "cuda" else 32  # Larger batches for GPU
 EMBEDDING_WORKERS = 2 if DEVICE == "cuda" else 4  # Fewer workers for GPU to avoid memory issues
@@ -200,7 +202,7 @@ def _jaccard_similarity(a: str, b: str) -> float:
     union = len(set_a | set_b)
     return intersection / union if union else 0.0
 
-def _is_contained_with_ratio(a: str, b: str, min_ratio: float = 0.9) -> bool:
+def _is_contained_with_ratio(a: str, b: str, min_ratio: float = CONTAINED_RATIO) -> bool:
     # True if the shorter string is contained within the longer string
     if not a or not b:
         return False
@@ -237,7 +239,7 @@ def merge_chunks(chunks: List[DocumentChunk], min_overlap: int = 5) -> List[Docu
                 t2 = texts[j]
 
                 # Containment check (keep longer)
-                if _is_contained_with_ratio(merged_text, t2, min_ratio=0.9):
+                if _is_contained_with_ratio(merged_text, t2, min_ratio=CONTAINED_RATIO):
                     if len(t2) > len(merged_text):
                         merged_text = t2
                     skip.add(j)
@@ -247,7 +249,7 @@ def merge_chunks(chunks: List[DocumentChunk], min_overlap: int = 5) -> List[Docu
 
                 # High-similarity check via Jaccard (near-duplicates)
                 jacc = _jaccard_similarity(merged_text, t2)
-                if jacc >= 0.92:
+                if jacc >= JACCARD_SIMILARITY_THRESHOLD:
                     if len(t2) > len(merged_text):
                         merged_text = t2
                     skip.add(j)
@@ -306,7 +308,7 @@ def merge_chunks_search(results: List[SearchResult], min_overlap: int = 5) -> Li
                 t2, score2, _ = texts[j]
 
                 # Containment check (keep longer, best score)
-                if _is_contained_with_ratio(merged_text, t2, min_ratio=0.9):
+                if _is_contained_with_ratio(merged_text, t2, min_ratio=CONTAINED_RATIO):
                     if len(t2) > len(merged_text):
                         merged_text = t2
                     merged_score = max(merged_score, score2)
@@ -316,7 +318,7 @@ def merge_chunks_search(results: List[SearchResult], min_overlap: int = 5) -> Li
 
                 # High-similarity check via Jaccard (near-duplicates)
                 jacc = _jaccard_similarity(merged_text, t2)
-                if jacc >= 0.92:
+                if jacc >= JACCARD_SIMILARITY_THRESHOLD:
                     if len(t2) > len(merged_text):
                         merged_text = t2
                     merged_score = max(merged_score, score2)
@@ -860,14 +862,14 @@ class TextExtractionSystem:
                     skip_add = True
                     break
                 # Containment deduplication (prefer longer)
-                if _is_contained_with_ratio(candidate_text, existing_text, min_ratio=0.9):
+                if _is_contained_with_ratio(candidate_text, existing_text, min_ratio=CONTAINED_RATIO):
                     if len(candidate_text) > len(existing_text):
                         replace_index = idx
                     else:
                         skip_add = True
                     break
                 # High Jaccard similarity (near-duplicate)
-                if _jaccard_similarity(candidate_text, existing_text) >= 0.92:
+                if _jaccard_similarity(candidate_text, existing_text) >= JACCARD_SIMILARITY_THRESHOLD:
                     if len(candidate_text) > len(existing_text):
                         replace_index = idx
                     else:
