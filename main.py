@@ -121,7 +121,8 @@ VALID_GEMINI_KEYS = get_valid_gemini_keys()
 MAX_WORKERS = 10
 CHUNK_SIZE = 512
 OVERLAP_SIZE = 50
-
+SEMANTIC_THRESHOLD_CHUNK_SCORE = 0.25
+ENSEMBLE_THRESHOLD_SCORE = 0.00
 # Embedding optimization settings
 EMBEDDING_BATCH_SIZE = 64 if DEVICE == "cuda" else 32  # Larger batches for GPU
 EMBEDDING_WORKERS = 2 if DEVICE == "cuda" else 4  # Fewer workers for GPU to avoid memory issues
@@ -845,7 +846,7 @@ class TextExtractionSystem:
         
         return results
         """
-    def semantic_search(self, query: str, top_k: int = 10) -> List[SearchResult]:
+    def semantic_search(self, query: str, top_k: int = 10, score_threshold: float = SEMANTIC_THRESHOLD_CHUNK_SCORE) -> List[SearchResult]:
         """Pure semantic search using FAISS (combined BGE + Intfloat)"""
         if not self.faiss_index:
             raise HTTPException(status_code=500, detail="FAISS index not built")
@@ -870,7 +871,10 @@ class TextExtractionSystem:
         # Prepare results
         results = []
         for idx, score in zip(indices[0], scores[0]):
-            if idx < len(self.chunks):
+            if score < score_threshold:
+                logger.info(f"Dropping chunk {idx} | Score: {score:.3f}")
+            #logger.info(f"Chunk {idx} | Score: {score:.3f}")
+            if idx < len(self.chunks) and score >= score_threshold:
                 chunk = self.chunks[idx]
                 result = SearchResult(
                     chunk=chunk,
@@ -878,9 +882,7 @@ class TextExtractionSystem:
                     search_strategy="semantic"
                 )
                 results.append(result)
-                logger.info(f"Chunk {idx} | Score: {score:.3f} | Text preview: {chunk.text[:50]}")
-
-
+                
         return results
 
     def lexical_search(self, query: str, top_k: int = 10) -> List[SearchResult]:
@@ -906,7 +908,7 @@ class TextExtractionSystem:
         
         return results
     
-    def ensemble_search(self, query: str, top_k: int = 10, score_threshold: float = 0.1) -> List[SearchResult]:
+    def ensemble_search(self, query: str, top_k: int = 10, score_threshold: float = ENSEMBLE_THRESHOLD_SCORE) -> List[SearchResult]:
         """Ensemble search using multiple embedding models"""
         start_time = time.time()
         if not self.faiss_index or not self.bm25:
@@ -942,14 +944,19 @@ class TextExtractionSystem:
         results = []
         for chunk_id, data in combined_scores.items():
             final_score = sum(data["scores"])
-            result = SearchResult(
-                chunk=data["chunk"],
-                combined_score=final_score,
-                search_strategy="ensemble"
-            )
-            results.append(result)
-            logger.info(f"Chunk {chunk_id} | Score: {final_score:.3f} | Text preview: {data['chunk'].text[:50]}")
-
+            #chunk = data["chunk"] 
+            logger.info(f"Chunk {chunk_id} | Score: {final_score:.3f} | Text preview: {data['chunk'].text[:50]}") 
+            if final_score >= score_threshold:  # <-- filter low-scoring chunks
+                result = SearchResult(
+                        chunk=data["chunk"],
+                        combined_score=final_score,
+                        search_strategy="ensemble"
+                    )
+                results.append(result)
+                #logger.info(f"Chunk {chunk_id} | Score: {final_score:.3f} | Text preview: {data['chunk'].text[:50]}")
+            #logger.info(f"Chunk {chunk_id} | Score: {final_score:.3f} | Text preview: {data['chunk'].text[:50]}")
+            #logger.info(f"Chunk {chunk_id} | Score: {final_score:.3f} | Text preview: {chunk.text[:50]}")
+        
         # Sort by final score and return top-k
         results.sort(key=lambda x: x.combined_score, reverse=True)
         logger.info(f"Ensemble search took {time.time() - start_time:.2f} seconds")
