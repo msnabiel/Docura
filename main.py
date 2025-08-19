@@ -121,7 +121,8 @@ VALID_GEMINI_KEYS = get_valid_gemini_keys()
 MAX_WORKERS = 10
 CHUNK_SIZE = 512
 OVERLAP_SIZE = 50
-
+SEMANTIC_THRESHOLD_CHUNK_SCORE = 0.25
+ENSEMBLE_THRESHOLD_SCORE = 0.00
 # Embedding optimization settings
 EMBEDDING_BATCH_SIZE = 64 if DEVICE == "cuda" else 32  # Larger batches for GPU
 EMBEDDING_WORKERS = 2 if DEVICE == "cuda" else 4  # Fewer workers for GPU to avoid memory issues
@@ -470,6 +471,29 @@ class TextExtractionSystem:
         except Exception as e:
             logger.error(f"Error processing local file: {e}")
             raise HTTPException(status_code=500, detail=f"Local file processing error: {e}")
+    def _dynamic_resize(self, chunks: List[DocumentChunk],
+                        min_chunk_size: int = 150,
+                        max_chunk_size: int = CHUNK_SIZE) -> List[DocumentChunk]:
+        """
+        Dynamically resize chunks between min and max token size.
+        """
+        adjusted = []
+        for chunk in chunks:
+            tokens = chunk.text.split()
+            if len(tokens) > max_chunk_size:
+                # break into sub-chunks
+                for i in range(0, len(tokens), max_chunk_size):
+                    sub_text = " ".join(tokens[i:i+max_chunk_size])
+                    new_chunk = DocumentChunk(text=sub_text,
+                                            metadata={**chunk.metadata, "resized": True})
+                    #new_chunk.semantic_score = chunk.semantic_score
+                    adjusted.append(new_chunk)
+            elif len(tokens) < min_chunk_size:
+                # keep small ones for now, filtering happens later
+                adjusted.append(chunk)
+            else:
+                adjusted.append(chunk)
+        return adjusted
     
     def chunk_text(self, text: str) -> List[DocumentChunk]:
         """Enhanced text chunking with multiple strategies"""
@@ -491,8 +515,14 @@ class TextExtractionSystem:
         # Remove duplicates and sort by position
         unique_chunks = self._deduplicate_chunks(chunks)
         unique_chunks.sort(key=lambda x: x.metadata.get("start_idx", 0))
+
+        # 🔹 Apply dynamic chunk resizing
+        resized_chunks = self._dynamic_resize(unique_chunks)
+        print("\n=== Chunk Scores ===")
+        for i, c in enumerate(resized_chunks, 1):
+            print(f"Chunk {i} | Score: {c.semantic_score:.3f} | Text preview: {c.text[:60]}...")
         
-        return unique_chunks
+        return resized_chunks
     
     def _semantic_chunking(self, text: str) -> List[DocumentChunk]:
         """Chunk text based on semantic boundaries (sentences)"""
@@ -816,7 +846,7 @@ class TextExtractionSystem:
         
         return results
         """
-    def semantic_search(self, query: str, top_k: int = 10) -> List[SearchResult]:
+    def semantic_search(self, query: str, top_k: int = 10, score_threshold: float = SEMANTIC_THRESHOLD_CHUNK_SCORE) -> List[SearchResult]:
         """Pure semantic search using FAISS (combined BGE + Intfloat)"""
         if not self.faiss_index:
             raise HTTPException(status_code=500, detail="FAISS index not built")
@@ -841,7 +871,10 @@ class TextExtractionSystem:
         # Prepare results
         results = []
         for idx, score in zip(indices[0], scores[0]):
-            if idx < len(self.chunks):
+            if score < score_threshold:
+                logger.info(f"Dropping chunk {idx} | Score: {score:.3f}")
+            #logger.info(f"Chunk {idx} | Score: {score:.3f}")
+            if idx < len(self.chunks) and score >= score_threshold:
                 chunk = self.chunks[idx]
                 result = SearchResult(
                     chunk=chunk,
@@ -849,7 +882,7 @@ class TextExtractionSystem:
                     search_strategy="semantic"
                 )
                 results.append(result)
-
+                
         return results
 
     def lexical_search(self, query: str, top_k: int = 10) -> List[SearchResult]:
@@ -875,7 +908,7 @@ class TextExtractionSystem:
         
         return results
     
-    def ensemble_search(self, query: str, top_k: int = 10) -> List[SearchResult]:
+    def ensemble_search(self, query: str, top_k: int = 10, score_threshold: float = ENSEMBLE_THRESHOLD_SCORE) -> List[SearchResult]:
         """Ensemble search using multiple embedding models"""
         start_time = time.time()
         if not self.faiss_index or not self.bm25:
@@ -911,12 +944,18 @@ class TextExtractionSystem:
         results = []
         for chunk_id, data in combined_scores.items():
             final_score = sum(data["scores"])
-            result = SearchResult(
-                chunk=data["chunk"],
-                combined_score=final_score,
-                search_strategy="ensemble"
-            )
-            results.append(result)
+            #chunk = data["chunk"] 
+            logger.info(f"Chunk {chunk_id} | Score: {final_score:.3f} | Text preview: {data['chunk'].text[:50]}") 
+            if final_score >= score_threshold:  # <-- filter low-scoring chunks
+                result = SearchResult(
+                        chunk=data["chunk"],
+                        combined_score=final_score,
+                        search_strategy="ensemble"
+                    )
+                results.append(result)
+                #logger.info(f"Chunk {chunk_id} | Score: {final_score:.3f} | Text preview: {data['chunk'].text[:50]}")
+            #logger.info(f"Chunk {chunk_id} | Score: {final_score:.3f} | Text preview: {data['chunk'].text[:50]}")
+            #logger.info(f"Chunk {chunk_id} | Score: {final_score:.3f} | Text preview: {chunk.text[:50]}")
         
         # Sort by final score and return top-k
         results.sort(key=lambda x: x.combined_score, reverse=True)
@@ -1416,6 +1455,7 @@ class TextExtractionSystem:
                                 #    contents=prompt
                                 #)
                                 # With asyncio
+                                logger.info(f"Context:\n{prompt}")
                                 response = await asyncio.to_thread(
                                     client.models.generate_content,
                                     model=model_name,
