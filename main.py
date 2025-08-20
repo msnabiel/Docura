@@ -62,36 +62,14 @@ import logging
 log_dir = "logs"
 os.makedirs(log_dir, exist_ok=True)
 
-
-class MultiColorFormatter(logging.Formatter):
-    LEVEL_COLORS = {
-        'DEBUG': Fore.CYAN,
-        'INFO': Fore.GREEN,
-        'WARNING': Fore.YELLOW,
-        'ERROR': Fore.RED,
-        'CRITICAL': Fore.MAGENTA
-    }
-
-    def format(self, record):
-        # Colors for each part
-        time_colored = Fore.BLUE + self.formatTime(record) + Style.RESET_ALL
-        level_colored = self.LEVEL_COLORS.get(record.levelname, Fore.WHITE) + record.levelname + Style.RESET_ALL
-        msg_colored = Fore.WHITE + record.getMessage() + Style.RESET_ALL
-
-        return f"{time_colored} - {level_colored} - {msg_colored}"
-
-# File handler (plain)
-file_handler = logging.FileHandler(os.path.join(log_dir, 'app.log'), mode='a')
-file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
-
-# Console handler (multi-colored)
-console_handler = logging.StreamHandler()
-console_handler.setFormatter(MultiColorFormatter())
-
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    handlers=[file_handler, console_handler],
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(os.path.join(log_dir, 'app.log'), mode='a'),
+        logging.StreamHandler()
+    ],
     force=True
 )
 # Get logger
