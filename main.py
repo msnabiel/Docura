@@ -12,7 +12,6 @@ import asyncio
 from contextlib import asynccontextmanager
 import numpy as np
 import faiss
-from intro import intro
 from sentence_transformers import SentenceTransformer
 from rank_bm25 import BM25Okapi
 import google.generativeai as genai
@@ -44,10 +43,6 @@ import google
 from config import (
     generation_config
 )
-from colorama import Fore, Style, init
-
-# Initialize colorama
-init(autoreset=True)
 # Import the direct text extraction functions
 from text_extractor import (
     extract_text_from_url, 
@@ -135,7 +130,8 @@ OVERLAP_SIZE = 50
 SEMANTIC_THRESHOLD_CHUNK_SCORE = 0.25
 ENSEMBLE_THRESHOLD_SCORE = 0.00
 JACCARD_SIMILARITY_THRESHOLD = 0.85
-CONTAINED_RATIO = 0.8
+CONTAINED_RATIO = 0.85
+FUZZY_THRESHOLD = 85
 # Embedding optimization settings
 EMBEDDING_BATCH_SIZE = 64 if DEVICE == "cuda" else 32  # Larger batches for GPU
 EMBEDDING_WORKERS = 2 if DEVICE == "cuda" else 4  # Fewer workers for GPU to avoid memory issues
@@ -186,7 +182,7 @@ class SearchResult:
         self.search_strategy = search_strategy
         self.rank = 0
 
-def fuzzy_matching(texts: List[str], min_ratio: int = 85) -> List[str]:
+def fuzzy_matching(texts: List[str], min_ratio: int = FUZZY_THRESHOLD) -> List[str]:
     """
     Deduplicate a list of texts using fuzzy matching.
     
