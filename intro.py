@@ -28,3 +28,4 @@ def intro():
         f"{Fore.CYAN}│{Style.RESET_ALL}                                                                 {Fore.CYAN}│{Style.RESET_ALL}\n"
         f"{Fore.CYAN}╰─────────────────────────────────────────────────────────────────╯{Style.RESET_ALL}"
     )
+intro()

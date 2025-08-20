@@ -4,6 +4,7 @@ import time
 import re
 import hashlib
 import random
+from rapidfuzz import fuzz
 import httpx
 from typing import List, Union, Dict, Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -43,6 +44,10 @@ import google
 from config import (
     generation_config
 )
+from colorama import Fore, Style, init
+
+# Initialize colorama
+init(autoreset=True)
 # Import the direct text extraction functions
 from text_extractor import (
     extract_text_from_url, 
@@ -58,13 +63,35 @@ log_dir = "logs"
 os.makedirs(log_dir, exist_ok=True)
 
 
+class MultiColorFormatter(logging.Formatter):
+    LEVEL_COLORS = {
+        'DEBUG': Fore.CYAN,
+        'INFO': Fore.GREEN,
+        'WARNING': Fore.YELLOW,
+        'ERROR': Fore.RED,
+        'CRITICAL': Fore.MAGENTA
+    }
+
+    def format(self, record):
+        # Colors for each part
+        time_colored = Fore.BLUE + self.formatTime(record) + Style.RESET_ALL
+        level_colored = self.LEVEL_COLORS.get(record.levelname, Fore.WHITE) + record.levelname + Style.RESET_ALL
+        msg_colored = Fore.WHITE + record.getMessage() + Style.RESET_ALL
+
+        return f"{time_colored} - {level_colored} - {msg_colored}"
+
+# File handler (plain)
+file_handler = logging.FileHandler(os.path.join(log_dir, 'app.log'), mode='a')
+file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+
+# Console handler (multi-colored)
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(MultiColorFormatter())
+
+# Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler(os.path.join(log_dir, 'app.log'), mode='a'),
-        logging.StreamHandler()
-    ],
+    handlers=[file_handler, console_handler],
     force=True
 )
 # Get logger
@@ -77,7 +104,7 @@ logger.info(f"Log level: {logging.getLevelName(logger.level)}")
 logger.info("=== LOGGING SYSTEM READY ===\n")
 # Add this import at the top of your file:
 # from colorama import init, Fore, Style
-intro()
+#intro()
 
 # GPU detection and optimization
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -130,7 +157,7 @@ OVERLAP_SIZE = 50
 SEMANTIC_THRESHOLD_CHUNK_SCORE = 0.25
 ENSEMBLE_THRESHOLD_SCORE = 0.00
 JACCARD_SIMILARITY_THRESHOLD = 0.85
-CONTAINED_RATIO = 0.85
+CONTAINED_RATIO = 0.8
 # Embedding optimization settings
 EMBEDDING_BATCH_SIZE = 64 if DEVICE == "cuda" else 32  # Larger batches for GPU
 EMBEDDING_WORKERS = 2 if DEVICE == "cuda" else 4  # Fewer workers for GPU to avoid memory issues
@@ -180,7 +207,41 @@ class SearchResult:
         self.combined_score = combined_score
         self.search_strategy = search_strategy
         self.rank = 0
-        
+
+def fuzzy_matching(texts: List[str], min_ratio: int = 85) -> List[str]:
+    """
+    Deduplicate a list of texts using fuzzy matching.
+    
+    Args:
+        texts: List of strings to deduplicate.
+        min_ratio: Minimum similarity (0-100) to consider two texts duplicates.
+    
+    Returns:
+        List of unique texts.
+    """
+    unique_texts: List[str] = []
+
+    for text in texts:
+        text_norm = text.lower().strip()
+        skip = False
+        replace_index = None
+
+        for idx, existing in enumerate(unique_texts):
+            existing_norm = existing.lower().strip()
+            if fuzz.token_set_ratio(text_norm, existing_norm) >= min_ratio:
+                if len(text) > len(existing):
+                    replace_index = idx
+                else:
+                    skip = True
+                break
+
+        if replace_index is not None:
+            unique_texts[replace_index] = text
+        elif not skip:
+            unique_texts.append(text)
+
+    return unique_texts
+
 def find_overlap(a: str, b: str, min_overlap: int = 5) -> int:
     """
     Find the length of the maximum suffix of 'a' that matches a prefix of 'b'.
@@ -1584,15 +1645,30 @@ class TextExtractionSystem:
                 search_results = self.hybrid_search(query, top_k=8)
 
             relevant_chunks = [result.chunk for result in search_results]
+            #Fuzzy matching
+            chunk_texts = [chunk.text for chunk in relevant_chunks]
+            unique_texts = fuzzy_matching(chunk_texts, min_ratio=85)
 
+            deduplicated_chunks = []
+            for text in unique_texts:
+                for chunk in relevant_chunks:
+                    if chunk.text == text:
+                        deduplicated_chunks.append(chunk)
+                        break
+
+            relevant_chunks = deduplicated_chunks
+            #relevant_chunks = self._deduplicate_chunks(relevant_chunks)
             # Deduplicate
-            seen_texts = set()
+            """            seen_texts = set()
             unique_chunks = []
             for chunk in relevant_chunks:
-                if chunk.text not in seen_texts:
+                normalized_text = " ".join(chunk.text.split()).lower()  # removes extra spaces and makes lowercase
+                if normalized_text not in seen_texts:
                     unique_chunks.append(chunk)
-                    seen_texts.add(chunk.text)
-            relevant_chunks = unique_chunks
+                    seen_texts.add(normalized_text)"""
+
+
+            #relevant_chunks = unique_chunks
 
             # Initial context
             context_parts = [
