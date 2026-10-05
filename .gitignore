@@ -2,6 +2,8 @@
 __pycache__/
 *.pyc
 logs/
+.env
 .env.local
 text_extraction.log
+data/
 uploaded_docs/

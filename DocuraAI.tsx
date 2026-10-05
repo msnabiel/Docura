@@ -1,6 +1,6 @@
 "use client"
 import { useState, useRef, useEffect } from "react"
-import { Send, Bot, User, Upload, X, FileText, Image, FileSpreadsheet, File } from "lucide-react"
+import { Send, Bot, User, Upload, X, FileText, Image, FileSpreadsheet } from "lucide-react"
 import { motion, AnimatePresence } from "framer-motion"
 import { File as FileIcon } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
@@ -17,12 +17,14 @@ interface Message {
 }
 
 interface UploadedFile {
+  id: string
   name: string
   size: number
   type: string
-  url: string
-  localUrl?: string // URL returned from backend upload
+  documentId?: string
 }
+
+const API_BASE = (process.env.NEXT_PUBLIC_DOCURA_API_URL || "").replace(/\/$/, "")
 
 export default function DocuraAI() {
   const [messages, setMessages] = useState<Message[]>([])
@@ -32,9 +34,12 @@ export default function DocuraAI() {
   const [dragOver, setDragOver] = useState(false)
   const [searchStrategy, setSearchStrategy] = useState("ensemble")
   const [uploadingFiles, setUploadingFiles] = useState(false)
+  const [apiToken, setApiToken] = useState("")
+  const [activeDocumentIds, setActiveDocumentIds] = useState<string[]>([])
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const removedUploadIdsRef = useRef<Set<string>>(new Set())
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
@@ -63,8 +68,9 @@ export default function DocuraAI() {
     const formData = new FormData()
     formData.append('file', file)
 
-    const response = await fetch("http://localhost:8000/api/v1/upload", {
+    const response = await fetch(`${API_BASE}/api/v1/upload`, {
       method: "POST",
+      headers: { Authorization: `Bearer ${apiToken}` },
       body: formData,
     })
 
@@ -73,7 +79,16 @@ export default function DocuraAI() {
     }
 
     const data = await response.json()
-    return data.url
+    return data.id
+  }
+
+  const deleteDocument = async (documentId: string) => {
+    const id = documentId.replace(/^upload:/, "")
+    const response = await fetch(`${API_BASE}/api/v1/documents/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${apiToken}` },
+    })
+    if (!response.ok) throw new Error(`Delete failed: ${response.statusText}`)
   }
 
   const handleFileUpload = async (files: FileList) => {
@@ -83,30 +98,33 @@ export default function DocuraAI() {
       for (const file of Array.from(files)) {
         // Create a temporary object for immediate UI feedback
         const tempFile: UploadedFile = {
+          id: crypto.randomUUID(),
           name: file.name,
           size: file.size,
           type: file.type,
-          url: URL.createObjectURL(file), // Temporary URL for preview
         }
         
         setUploadedFiles(prev => [...prev, tempFile])
         
         // Upload to backend
         try {
-          const backendUrl = await uploadFileToBackend(file)
-          
-          // Update the file with the backend URL
+          const documentId = await uploadFileToBackend(file)
+          if (removedUploadIdsRef.current.delete(tempFile.id)) {
+            await deleteDocument(documentId)
+            continue
+          }
+
           setUploadedFiles(prev => 
             prev.map(f => 
-              f.name === file.name 
-                ? { ...f, localUrl: backendUrl }
+              f.id === tempFile.id
+                ? { ...f, documentId }
                 : f
             )
           )
         } catch (error) {
           console.error(`Failed to upload ${file.name}:`, error)
           // Remove the file from the list if upload failed
-          setUploadedFiles(prev => prev.filter(f => f.name !== file.name))
+          setUploadedFiles(prev => prev.filter(f => f.id !== tempFile.id))
           
           // Show error message
           setMessages(prev => [
@@ -125,6 +143,13 @@ export default function DocuraAI() {
   }
 
   const removeFile = (index: number) => {
+    const file = uploadedFiles[index]
+    if (!file) return
+    if (file.documentId) {
+      deleteDocument(file.documentId).catch(error => console.error("Failed to delete document:", error))
+    } else {
+      removedUploadIdsRef.current.add(file.id)
+    }
     setUploadedFiles(prev => prev.filter((_, i) => i !== index))
   }
 
@@ -150,7 +175,7 @@ export default function DocuraAI() {
     if (!input.trim() && uploadedFiles.length === 0) return;
 
     // Check if all files have been uploaded to backend
-    const filesNotUploaded = uploadedFiles.filter(f => !f.localUrl)
+    const filesNotUploaded = uploadedFiles.filter(f => !f.documentId)
     if (filesNotUploaded.length > 0) {
       setMessages(prev => [
         ...prev,
@@ -170,8 +195,14 @@ export default function DocuraAI() {
       files: uploadedFiles.length > 0 ? [...uploadedFiles] : undefined,
     };
 
-    setMessages((prev) => [...prev, userMessage]);
     const currentInput = input.trim();
+    const documents = Array.from(new Set([...activeDocumentIds, ...uploadedFiles.map(file => file.documentId!)]))
+    if (documents.length === 0) {
+      setMessages(prev => [...prev, { role: "bot", content: "Please upload a document first.", timestamp: new Date() }])
+      return
+    }
+    setMessages((prev) => [...prev, userMessage]);
+    setActiveDocumentIds(documents)
     setInput("");
     setUploadedFiles([]);
     setIsTyping(true);
@@ -179,19 +210,19 @@ export default function DocuraAI() {
     try {
       // Prepare request payload using backend URLs
       const payload = {
-        documents: uploadedFiles.length === 1
-          ? uploadedFiles[0].localUrl // single doc → string
-          : uploadedFiles.map((file) => file.localUrl), // multiple → array
-        questions: [currentInput || "Please analyze the uploaded document(s)"], // Always send as array
-        search_strategy: searchStrategy // Include the search strategy
+        documents,
+        question: currentInput || "Please analyze the uploaded document(s)",
+        search_strategy: searchStrategy,
+        history: messages.slice(-12).map(message => ({
+          role: message.role === "bot" ? "assistant" : "user",
+          content: message.content.slice(0, 4000),
+        })),
       };
-
-      console.log("Sending payload:", payload);
-
-      const res = await fetch("http://localhost:8000/api/v1/hackrx/run", {
+      const res = await fetch(`${API_BASE}/api/v1/ask`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          Authorization: `Bearer ${apiToken}`,
         },
         body: JSON.stringify(payload),
       });
@@ -201,13 +232,13 @@ export default function DocuraAI() {
       }
 
       const data = await res.json();
-      console.log("Received response:", data);
+      if (Array.isArray(data.documents)) {
+        setActiveDocumentIds(data.documents)
+      }
 
       const botMessage: Message = {
         role: "bot",
-        content: Array.isArray(data.answers) && data.answers.length > 0
-          ? data.answers.join("\n\n")
-          : data.answers || "⚠️ No answer found or backend returned empty response.",
+        content: data.answer || "⚠️ No answer found or backend returned empty response.",
         timestamp: new Date(),
       };
 
@@ -273,6 +304,14 @@ export default function DocuraAI() {
           
           {/* Search Strategy Selector */}
           <div className="flex items-center gap-3">
+            <input
+              type="password"
+              value={apiToken}
+              onChange={(event) => setApiToken(event.target.value)}
+              placeholder="API token"
+              aria-label="API token"
+              className="px-3 py-2 text-sm bg-white border border-gray-200 rounded-lg"
+            />
             <span className="text-sm font-medium text-gray-700">Search Strategy:</span>
             <select
               value={searchStrategy}
@@ -521,7 +560,7 @@ export default function DocuraAI() {
                       <div className="flex-1 min-w-0">
                         <p className="font-medium text-xs sm:text-sm text-gray-800 truncate">{file.name}</p>
                         <p className="text-xs text-gray-500">{formatFileSize(file.size)}</p>
-                        {file.localUrl && (
+                        {file.documentId && (
                           <p className="text-xs text-green-600">✓ Uploaded</p>
                         )}
                       </div>
