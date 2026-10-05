@@ -1,12 +1,7 @@
 pydantic
 requests
 Pillow
-pdf2image
 python-pptx==1.0.2
-pptx2txt2==1.1.0
-python-pptx
-python-dateutil
-google-generativeai
 google-genai
 httpx
 numpy
@@ -25,6 +20,4 @@ opencv-python
 beautifulsoup4
 pandas
 xlrd
-nltk
 python-multipart
-rapidfuzz

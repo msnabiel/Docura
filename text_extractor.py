@@ -7,42 +7,29 @@ import email
 import logging
 import tempfile
 import fitz  # PyMuPDF
-import google.generativeai as genai
 import hashlib
 import zipfile
 import subprocess
-import requests
 from PIL import Image
-from pdf2image import convert_from_path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import lru_cache
-import urllib.request
-from urllib.parse import urlparse
-from typing import Dict, Any, List, Optional, Tuple, Union, Protocol
+from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
 import time
-from pptx.enum.shapes import MSO_SHAPE_TYPE
 from PyPDF2 import PdfReader
 from docx import Document
 from pptx import Presentation
-from PIL import Image
 import pytesseract
 import cv2
 from bs4 import BeautifulSoup
 import pandas as pd
 import xlrd
-import nltk
 import numpy as np
 from tempfile import NamedTemporaryFile
 from io import BytesIO
-from dotenv import load_dotenv
 from utils import clean_ocr_text
-
-# === Gemini Setup ===
-load_dotenv(dotenv_path=".env.local")
-GEMINI_API_KEY_PAID = os.getenv("GEMINI_API_KEY_PAID") # Replace with your Gemini API key
-genai.configure(api_key=GEMINI_API_KEY_PAID)
-model = genai.GenerativeModel("gemini-2.5-flash")
+from source_security import MAX_SOURCE_BYTES, MAX_ARCHIVE_BYTES, MAX_ARCHIVE_MEMBERS, read_bounded
+from extraction_models import ExtractionResult
 
 # Configure logging
 logging.basicConfig(
@@ -54,32 +41,6 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
-
-@dataclass
-class ExtractionResult:
-    """Structured result object for text extraction"""
-    text: str
-    metadata: Dict[str, Any]
-    success: bool = True
-    error: Optional[str] = None
-    processing_time: float = 0.0
-    file_hash: Optional[str] = None
-    
-    def __post_init__(self):
-        if not self.success and not self.error:
-            self.error = "Unknown error occurred"
-    
-    def to_tuple(self) -> Tuple[str, Dict[str, Any]]:
-        """Convert to backward-compatible tuple format"""
-        metadata = self.metadata.copy()
-        metadata.update({
-            'success': self.success,
-            'processing_time': self.processing_time,
-            'file_hash': self.file_hash
-        })
-        if self.error:
-            metadata['error'] = self.error
-        return (self.text, metadata)
 
 @dataclass
 class CleaningOptions:
@@ -105,11 +66,6 @@ class CleaningOptions:
             raise ValueError("max_length must be positive")
         if not 0 <= self.confidence_threshold <= 1:
             raise ValueError("confidence_threshold must be between 0 and 1")
-
-class TextExtractor(Protocol):
-    """Protocol for text extractors"""
-    def extract(self, file_bytes: bytes, **kwargs) -> ExtractionResult:
-        ...
 
 class EnhancedRAGTextCleaner:
     """Improved text cleaner with caching and better performance"""
@@ -194,36 +150,6 @@ class EnhancedRAGTextCleaner:
         logger.debug(f"Text cleaned: {original_length} -> {len(text)} chars")
         return text.strip()
 
-class CacheManager:
-    """Simple in-memory cache for extraction results"""
-    
-    def __init__(self, max_size: int = 100):
-        self.cache = {}
-        self.max_size = max_size
-        self.access_times = {}
-    
-    def get_hash(self, file_bytes: bytes, filename: str) -> str:
-        """Generate hash for caching"""
-        content_hash = hashlib.sha256(file_bytes).hexdigest()[:16]
-        return f"{filename}_{content_hash}"
-    
-    def get(self, cache_key: str) -> Optional[ExtractionResult]:
-        """Get cached result"""
-        if cache_key in self.cache:
-            self.access_times[cache_key] = time.time()
-            return self.cache[cache_key]
-        return None
-    
-    def set(self, cache_key: str, result: ExtractionResult):
-        """Cache result with LRU eviction"""
-        if len(self.cache) >= self.max_size:
-            # Remove least recently used
-            lru_key = min(self.access_times, key=self.access_times.get)
-            del self.cache[lru_key]
-            del self.access_times[lru_key]
-        
-        self.cache[cache_key] = result
-        self.access_times[cache_key] = time.time()
 class FastPPTXOCRExtractor:
     def __init__(self, dpi: int = 300, max_workers: int = 4):
         self.dpi = dpi
@@ -255,56 +181,29 @@ class FastPPTXOCRExtractor:
             paths.append(img_path)
         return paths
 
-    def _gemini_ocr_image(self, image_path: str, prompt: str = "Extract all text from this slide:") -> str:
-        with open(image_path, "rb") as f:
-            image_data = f.read()
-        response = model.generate_content([
-            {"mime_type": "image/png", "data": image_data},
-            prompt
-        ])
-        return clean_ocr_text(response.text)
-
-    def _gemini_pdf_extract(self, pdf_path: str, prompt: str = "Extract slide-wise text from this presentation:") -> str:
-        with open(pdf_path, "rb") as f:
-            pdf_data = f.read()
-        response = model.generate_content([
-            {"mime_type": "application/pdf", "data": pdf_data},
-            prompt
-        ])
-        return clean_ocr_text(response.text)
+    def _ocr_image(self, image_path: str) -> str:
+        with Image.open(image_path) as image:
+            return clean_ocr_text(pytesseract.image_to_string(image))
 
     def _parallel_ocr_images(self, image_paths: list[str]) -> list[str]:
-        results = []
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            futures = [executor.submit(self._gemini_ocr_image, path) for path in image_paths]
-            for future in as_completed(futures):
-                try:
-                    results.append(future.result())
-                except Exception as e:
-                    results.append(f"[ERROR] {e}")
-        return results
+            return list(executor.map(self._ocr_image, image_paths))
 
     def extract_text_from_pptx_slides(self, pptx_path: str) -> list[str]:
         with tempfile.TemporaryDirectory() as tmp:
             native_text = self._extract_text_native(pptx_path)
-            pdf_path = self._pptx_to_pdf(pptx_path, tmp)
-
             try:
-                print("🔍 Using Gemini Vision Pro on full PDF...")
-                gemini_text = self._gemini_pdf_extract(pdf_path)
-                return [native_text, gemini_text]
-            except Exception as e:
-                print(f"⚠️ Gemini PDF extract failed: {e}")
-                print("🔄 Falling back to image-based OCR...")
+                pdf_path = self._pptx_to_pdf(pptx_path, tmp)
                 images = self._pdf_to_images(pdf_path, tmp)
-                ocr_texts = self._parallel_ocr_images(images)
-                return [native_text] + ocr_texts
+                return [native_text] + self._parallel_ocr_images(images)
+            except Exception as e:
+                if native_text:
+                    logger.warning("Presentation OCR unavailable: %s", type(e).__name__)
+                    return [native_text]
+                raise
 
 class PDFExtractor:
     """Optimized PDF extractor with better error handling"""
-    
-    def __init__(self, cache_manager: Optional[CacheManager] = None):
-        self.cache_manager = cache_manager
     
     def _needs_ocr_enhancement(self, text: str, page_area: float = 0) -> bool:
         """Improved OCR need detection"""
@@ -623,14 +522,12 @@ class PDFExtractor:
                 )
 
 class EnhancedTextExtractionService:
-    """Main service class with improved architecture"""
-    
-    def __init__(self, cache_size: int = 100, max_workers: int = None):
-        self.cache_manager = CacheManager(cache_size)
-        self.max_workers = max_workers or min(8, os.cpu_count() or 1)
+    """Dispatch byte content to format specific extractors."""
+
+    def __init__(self):
         
         # Initialize extractors
-        self.pdf_extractor = PDFExtractor(self.cache_manager)
+        self.pdf_extractor = PDFExtractor()
         
         # Register extractors
         self.extractors = {
@@ -655,17 +552,11 @@ class EnhancedTextExtractionService:
     
     def extract_text_from_bytes(self, file_bytes: bytes, filename: str, 
                                cleaning_options: Optional[CleaningOptions] = None) -> ExtractionResult:
-        """Extract text from file bytes with caching and error handling"""
+        """Extract text from file bytes; DocumentService owns the cache."""
         start_time = time.time()
-        
-        # Generate cache key
-        cache_key = self.cache_manager.get_hash(file_bytes, filename)
-        
-        # Check cache
-        cached_result = self.cache_manager.get(cache_key)
-        if cached_result:
-            logger.info(f"Cache hit for {filename}")
-            return cached_result
+        if len(file_bytes) > MAX_SOURCE_BYTES:
+            return ExtractionResult(text="", metadata={"filename": filename}, success=False,
+                                    error="Document exceeds the size limit")
         
         # Set default options
         if cleaning_options is None:
@@ -673,6 +564,13 @@ class EnhancedTextExtractionService:
         
         try:
             ext = os.path.splitext(filename)[-1].lower()
+            if ext in {".zip", ".docx", ".pptx", ".xlsx"}:
+                with zipfile.ZipFile(BytesIO(file_bytes)) as archive:
+                    members = archive.infolist()
+                    max_members = MAX_ARCHIVE_MEMBERS if ext == ".zip" else 1000
+                    if len(members) > max_members or sum(member.file_size for member in members) > MAX_ARCHIVE_BYTES:
+                        return ExtractionResult(text="", metadata={"filename": filename}, success=False,
+                                                error="Archive exceeds the extraction limit")
             
             if ext not in self.extractors:
                 return ExtractionResult(
@@ -693,7 +591,7 @@ class EnhancedTextExtractionService:
             
             # Add processing metadata
             result.processing_time = time.time() - start_time
-            result.file_hash = cache_key
+            result.file_hash = hashlib.sha256(file_bytes).hexdigest()
             result.metadata.update({
                 "filename": filename,
                 "file_type": ext,
@@ -701,14 +599,10 @@ class EnhancedTextExtractionService:
                 "cleaning_applied": cleaning_options is not None
             })
             
-            # Cache successful results
-            if result.success:
-                self.cache_manager.set(cache_key, result)
-            
             return result
             
         except Exception as e:
-            logger.error(f"Unexpected error extracting text from {filename}: {e}")
+            logger.error("Text extraction failed: %s", type(e).__name__)
             return ExtractionResult(
                 text="",
                 metadata={"filename": filename},
@@ -716,259 +610,6 @@ class EnhancedTextExtractionService:
                 error=str(e),
                 processing_time=time.time() - start_time
             )
-    
-    def extract_text_from_url(self, url: str, 
-                             cleaning_options: Optional[CleaningOptions] = None) -> ExtractionResult:
-        """Download and extract text from URL or local file — skips .bin files"""
-        try:
-            logger.info(f"Preparing to extract from URL: {url}")
-            
-            # Handle local file URLs
-            if url.startswith('file://'):
-                file_path = url[7:]  # Remove 'file://' prefix
-                if not os.path.exists(file_path):
-                    return ExtractionResult(
-                        text="",
-                        metadata={"source_url": url},
-                        success=False,
-                        error=f"Local file not found: {file_path}"
-                    )
-                
-                # Read local file
-                with open(file_path, 'rb') as f:
-                    file_bytes = f.read()
-                
-                filename = os.path.basename(file_path)
-                logger.info(f"Reading local file: {filename}")
-                
-            else:
-                # Handle remote URLs
-                parsed_url = urlparse(url)
-                filename = os.path.basename(parsed_url.path) or "document"
-
-                # Early exit if file appears to be a .bin
-                if filename.lower().endswith('.bin'):
-                    return ExtractionResult(
-                        text="",
-                        metadata={"source_url": url},
-                        success=False,
-                        error="Skipping download: '.bin' files are not supported for text extraction."
-                    )
-
-                # Download with timeout and user agent
-                req = urllib.request.Request(
-                    url,
-                    headers={'User-Agent': 'Mozilla/5.0 (compatible; TextExtractor/1.0)'}
-                )
-                
-                with urllib.request.urlopen(req, timeout=30) as response:
-                    file_bytes = response.read()
-
-                    # Guess extension if missing
-                    if '.' not in filename:
-                        content_type = response.headers.get('content-type', '').lower()
-                        if 'pdf' in content_type:
-                            filename += '.pdf'
-                        elif 'image' in content_type:
-                            filename += '.jpg'
-                        else:
-                            filename += '.txt'
-
-            # Extract text from bytes
-            result = self.extract_text_from_bytes(file_bytes, filename, cleaning_options)
-            result.metadata["source_url"] = url
-
-            return result
-
-        except Exception as e:
-            logger.error(f"Error downloading/extracting from URL {url}: {e}")
-            return ExtractionResult(
-                text="",
-                metadata={"source_url": url},
-                success=False,
-                error=str(e)
-            )
-
-    def extract_text_from_web_url(self, url: str, 
-                                 cleaning_options: Optional[CleaningOptions] = None) -> ExtractionResult:
-        """Extract text from web pages with enhanced HTML parsing"""
-        try:
-            logger.info(f"Extracting text from web page: {url}")
-            
-            # Download the web page
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-            }
-            
-            response = requests.get(url, headers=headers, timeout=30)
-            response.raise_for_status()
-            
-            # Parse HTML content
-            soup = BeautifulSoup(response.content, 'html.parser')
-            
-            # Remove script and style elements
-            for script in soup(["script", "style", "nav", "footer", "header"]):
-                script.decompose()
-            
-            # Extract text with structure preservation
-            if cleaning_options and cleaning_options.preserve_structure:
-                # Get text with line breaks for structure
-                text = soup.get_text(separator='\n', strip=True)
-            else:
-                # Get plain text
-                text = soup.get_text(separator=' ', strip=True)
-            
-            # Extract metadata
-            title = soup.find('title')
-            meta_description = soup.find('meta', attrs={'name': 'description'})
-            meta_keywords = soup.find('meta', attrs={'name': 'keywords'})
-            
-            # Apply cleaning if specified
-            if cleaning_options:
-                cleaner = EnhancedRAGTextCleaner(cleaning_options)
-                text = cleaner.clean_text(text, is_ocr=False)
-            
-            metadata = {
-                "method": "web_parser",
-                "title": title.string if title else "",
-                "description": meta_description.get('content', '') if meta_description else "",
-                "keywords": meta_keywords.get('content', '') if meta_keywords else "",
-                "url": url,
-                "content_type": response.headers.get('content-type', ''),
-                "status_code": response.status_code,
-                "content_length": len(response.content)
-            }
-            
-            return ExtractionResult(
-                text=text.strip(),
-                metadata=metadata,
-                success=True,
-                processing_time=0.0  # Could add timing if needed
-            )
-            
-        except Exception as e:
-            logger.error(f"Error extracting text from web page {url}: {e}")
-            return ExtractionResult(
-                text="",
-                metadata={"url": url, "method": "web_parser"},
-                success=False,
-                error=str(e)
-            )
-
-    def extract_text_from_api_url(self, url: str, 
-                                 cleaning_options: Optional[CleaningOptions] = None) -> ExtractionResult:
-        """Extract text from API responses (JSON)"""
-        try:
-            logger.info(f"Extracting text from API: {url}")
-            
-            # Download the API response
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (compatible; TextExtractor/1.0)',
-                'Accept': 'application/json'
-            }
-            
-            response = requests.get(url, headers=headers, timeout=30)
-            response.raise_for_status()
-            
-            # Parse JSON content
-            try:
-                data = response.json()
-                
-                # Convert JSON to readable text
-                if cleaning_options and cleaning_options.preserve_formatting:
-                    text = json.dumps(data, indent=2, ensure_ascii=False)
-                else:
-                    text = json.dumps(data, ensure_ascii=False)
-                
-                # Apply cleaning if specified
-                if cleaning_options:
-                    cleaner = EnhancedRAGTextCleaner(cleaning_options)
-                    text = cleaner.clean_text(text, is_ocr=False)
-                
-                metadata = {
-                    "method": "api_parser",
-                    "url": url,
-                    "content_type": response.headers.get('content-type', ''),
-                    "status_code": response.status_code,
-                    "data_type": type(data).__name__,
-                    "data_keys": list(data.keys()) if isinstance(data, dict) else [],
-                    "content_length": len(response.content)
-                }
-                
-                return ExtractionResult(
-                    text=text.strip(),
-                    metadata=metadata,
-                    success=True,
-                    processing_time=0.0
-                )
-                
-            except json.JSONDecodeError as e:
-                # If not valid JSON, treat as plain text
-                text = response.text
-                
-                if cleaning_options:
-                    cleaner = EnhancedRAGTextCleaner(cleaning_options)
-                    text = cleaner.clean_text(text, is_ocr=False)
-                
-                metadata = {
-                    "method": "api_parser_text",
-                    "url": url,
-                    "content_type": response.headers.get('content-type', ''),
-                    "status_code": response.status_code,
-                    "note": "Response was not valid JSON, treated as text",
-                    "content_length": len(response.content)
-                }
-                
-                return ExtractionResult(
-                    text=text.strip(),
-                    metadata=metadata,
-                    success=True,
-                    processing_time=0.0
-                )
-            
-        except Exception as e:
-            logger.error(f"Error extracting text from API {url}: {e}")
-            return ExtractionResult(
-                text="",
-                metadata={"url": url, "method": "api_parser"},
-                success=False,
-                error=str(e)
-            )
-    def extract_text_from_multiple_sources(self, sources: List[Union[str, Tuple[bytes, str]]], 
-                                         cleaning_options: Optional[CleaningOptions] = None) -> List[ExtractionResult]:
-        """Process multiple sources in parallel"""
-        results = []
-        
-        def process_source(source):
-            if isinstance(source, str):  # URL
-                return self.extract_text_from_url(source, cleaning_options)
-            else:  # (bytes, filename) tuple
-                file_bytes, filename = source
-                return self.extract_text_from_bytes(file_bytes, filename, cleaning_options)
-        
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            future_to_source = {executor.submit(process_source, source): source for source in sources}
-            
-            for future in as_completed(future_to_source):
-                source = future_to_source[future]
-                try:
-                    result = future.result()
-                    results.append(result)
-                    
-                    source_id = source if isinstance(source, str) else source[1]
-                    status = "✅" if result.success else "❌"
-                    logger.info(f"{status} Processed {source_id}")
-                    
-                except Exception as e:
-                    logger.error(f"Unhandled exception for {source}: {e}")
-                    results.append(ExtractionResult(
-                        text="",
-                        metadata={"source": str(source)},
-                        success=False,
-                        error=str(e)
-                    ))
-        
-        return results
     
     # Extractor methods
     def _extract_pdf(self, file_bytes: bytes, options: CleaningOptions) -> ExtractionResult:
@@ -1391,6 +1032,10 @@ class EnhancedTextExtractionService:
         """Extract text from ZIP archives by processing all supported files within"""
         try:
             with zipfile.ZipFile(BytesIO(file_bytes), 'r') as zip_file:
+                members = zip_file.infolist()
+                if len(members) > MAX_ARCHIVE_MEMBERS or sum(member.file_size for member in members) > MAX_ARCHIVE_BYTES:
+                    return ExtractionResult(text="", metadata={"method": "zip"}, success=False,
+                                            error="Archive exceeds the extraction limit")
                 # Get list of files in the archive
                 file_list = zip_file.namelist()
                 
@@ -1424,12 +1069,17 @@ class EnhancedTextExtractionService:
                 extracted_texts = []
                 processed_files = []
                 failed_files = []
+                total_uncompressed = 0
                 
                 for filename in supported_files:
                     try:
                         # Read file from ZIP
                         with zip_file.open(filename) as file_in_zip:
-                            file_bytes_in_zip = file_in_zip.read()
+                            file_bytes_in_zip = read_bounded(
+                                file_in_zip,
+                                min(MAX_SOURCE_BYTES, MAX_ARCHIVE_BYTES - total_uncompressed)
+                            )
+                        total_uncompressed += len(file_bytes_in_zip)
                         
                         # Extract text using the main service
                         result = self.extract_text_from_bytes(file_bytes_in_zip, filename, options)
@@ -1440,8 +1090,11 @@ class EnhancedTextExtractionService:
                         else:
                             failed_files.append(filename)
                             
+                    except ValueError:
+                        return ExtractionResult(text="", metadata={"method": "zip"}, success=False,
+                                                error="Archive exceeds the extraction limit")
                     except Exception as e:
-                        logger.warning(f"Failed to process {filename} in ZIP: {e}")
+                        logger.warning("ZIP member extraction failed: %s", type(e).__name__)
                         failed_files.append(filename)
                 
                 if not extracted_texts:
@@ -1545,174 +1198,3 @@ class EnhancedTextExtractionService:
                 success=False,
                 error=f"Unexpected error processing binary file: {str(e)}"
             )
-
-
-# COMPATIBILITY FUNCTIONS - These maintain backward compatibility with your main app
-
-def extract_text_from_bytes(file_bytes: bytes, filename: str, 
-                           enable_ocr: bool = True, 
-                           cleaning_options: Optional[CleaningOptions] = None) -> Tuple[str, Dict[str, Any]]:
-    """
-    Backward compatible function to extract text from file bytes
-    
-    Returns:
-        Tuple of (text, metadata) - compatible with your existing code
-    """
-    if cleaning_options is None:
-        cleaning_options = CleaningOptions(enable_ocr=enable_ocr)
-    
-    service = EnhancedTextExtractionService()
-    result = service.extract_text_from_bytes(file_bytes, filename, cleaning_options)
-    
-    return result.to_tuple()
-
-def extract_text_from_url(url: str, 
-                         enable_ocr: bool = True,
-                         cleaning_options: Optional[CleaningOptions] = None) -> Tuple[str, Dict[str, Any]]:
-    """
-    Backward compatible function to extract text from a URL
-    
-    Returns:
-        Tuple of (text, metadata) - compatible with your existing code
-    """
-    if cleaning_options is None:
-        cleaning_options = CleaningOptions(enable_ocr=enable_ocr)
-    
-    service = EnhancedTextExtractionService()
-    result = service.extract_text_from_url(url, cleaning_options)
-    
-    return result.to_tuple()
-
-def extract_text_from_multiple_urls(urls: List[str], 
-                                   enable_ocr: bool = True,
-                                   cleaning_options: Optional[CleaningOptions] = None,
-                                   max_workers: int = 4) -> List[Tuple[str, Dict[str, Any]]]:
-    """
-    BACKWARD COMPATIBLE: Extract text from multiple URLs in parallel
-    
-    Args:
-        urls: List of URLs to process
-        enable_ocr: Whether to enable OCR for PDFs and images
-        cleaning_options: Text cleaning options
-        max_workers: Maximum number of parallel workers
-    
-    Returns:
-        List of tuples: [(extracted_text, metadata), ...]
-    """
-    if cleaning_options is None:
-        cleaning_options = CleaningOptions(enable_ocr=enable_ocr)
-    
-    service = EnhancedTextExtractionService(max_workers=max_workers)
-    results = service.extract_text_from_multiple_sources(urls, cleaning_options)
-    
-    # Convert ExtractionResult objects to backward-compatible format
-    return [result.to_tuple() for result in results]
-
-def extract_text_from_web_url(url: str, 
-                             cleaning_options: Optional[CleaningOptions] = None) -> Tuple[str, Dict[str, Any]]:
-    """
-    Extract text from web pages (HTML) with enhanced parsing
-    
-    Args:
-        url: URL of the web page
-        cleaning_options: Text cleaning options
-    
-    Returns:
-        Tuple of (text, metadata) - compatible with your existing code
-    """
-    if cleaning_options is None:
-        cleaning_options = CleaningOptions(enable_ocr=False)
-    
-    service = EnhancedTextExtractionService()
-    result = service.extract_text_from_web_url(url, cleaning_options)
-    
-    return result.to_tuple()
-
-def extract_text_from_api_url(url: str, 
-                             cleaning_options: Optional[CleaningOptions] = None) -> Tuple[str, Dict[str, Any]]:
-    """
-    Extract text from API responses (JSON)
-    
-    Args:
-        url: URL of the API endpoint
-        cleaning_options: Text cleaning options
-    
-    Returns:
-        Tuple of (text, metadata) - compatible with your existing code
-    """
-    if cleaning_options is None:
-        cleaning_options = CleaningOptions(enable_ocr=False)
-    
-    service = EnhancedTextExtractionService()
-    result = service.extract_text_from_api_url(url, cleaning_options)
-    
-    return result.to_tuple()
-
-def extract_text_from_multiple_sources(sources: List[Union[str, Tuple[bytes, str]]], 
-                                     enable_ocr: bool = True,
-                                     cleaning_options: Optional[CleaningOptions] = None,
-                                     max_workers: int = None) -> List[Tuple[str, Dict[str, Any]]]:
-    """
-    Extract text from multiple sources (URLs or bytes) with backward compatibility
-    
-    Args:
-        sources: List of URLs or (bytes, filename) tuples
-        enable_ocr: Whether to enable OCR
-        cleaning_options: Text cleaning options  
-        max_workers: Maximum number of parallel workers
-    
-    Returns:
-        List of tuples: [(extracted_text, metadata), ...]
-    """
-    if cleaning_options is None:
-        cleaning_options = CleaningOptions(enable_ocr=enable_ocr)
-    
-    service = EnhancedTextExtractionService(max_workers=max_workers)
-    results = service.extract_text_from_multiple_sources(sources, cleaning_options)
-    
-    # Convert to backward-compatible format
-    return [result.to_tuple() for result in results]
-
-
-# Example usage and testing
-if __name__ == "__main__":
-    # Example usage with backward compatibility
-    service = EnhancedTextExtractionService()
-    
-    # Configure extraction options
-    options = CleaningOptions(
-        enable_ocr=True,
-        hybrid_mode=True,
-        remove_urls=False,  # Preserve URLs
-        remove_emails=False,  # Preserve emails
-        preserve_structure=True,
-        language='eng',  # OCR language
-        confidence_threshold=0.7
-    )
-    
-    print("Enhanced RAG Text Extractor - Backward Compatible Version")
-    print(f"Supported file types: {list(service.extractors.keys())}")
-    print("Key improvements:")
-    print("- ✅ Better error handling and structured results")
-    print("- ✅ Intelligent caching system")
-    print("- ✅ Enhanced OCR with multiple strategies")
-    print("- ✅ Improved text fusion algorithm")
-    print("- ✅ Better concurrency control")
-    print("- ✅ Comprehensive logging")
-    print("- ✅ FULL backward compatibility maintained")
-    print("- ✅ All functions return (text, metadata) tuples as expected")
-    
-    # Test backward compatibility
-    print("\n=== Testing Backward Compatibility ===")
-    
-    # Test the functions that your main app uses:
-    # text, metadata = extract_text_from_url("https://example.com/doc.pdf")
-    # results = extract_text_from_multiple_urls(["url1", "url2"])
-    # text, metadata = extract_text_from_bytes(file_bytes, "document.pdf")
-    
-    print("✅ All backward compatibility functions are available:")
-    print("  - extract_text_from_url() -> (text, metadata)")
-    print("  - extract_text_from_bytes() -> (text, metadata)")
-    print("  - extract_text_from_multiple_urls() -> [(text, metadata), ...]")
-    print("  - extract_text_from_multiple_sources() -> [(text, metadata), ...]")
-    print("\n✅ Your existing main application code should work without changes!")

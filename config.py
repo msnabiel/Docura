@@ -22,7 +22,7 @@ generation_config = {
                             "required": ["key", "value"]
                         }
                     },
-                    "body": {"nullable": True}
+                    "body": {"type": "object", "nullable": True}
                 },
                 "required": ["type", "url"]
             }
@@ -30,16 +30,3 @@ generation_config = {
         "required": ["answer", "confidence_score", "need_api"]
     }
 }
-
-"""
-Return ONLY this JSON (no markdown, no extra text):
-{{
-  "answer": "combine answers into key-word rich, descriptive,string",
-  "confidence_score": <float between 0 and 1>,
-  "need_api": false | {{
-    "type": "GET" | "POST",
-    "url": "<api or webpage URL>",
-    "headers": <optional>,
-    "body": <optional>
-  }}
-}}"""

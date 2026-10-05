@@ -1,27 +1,38 @@
-from typing import Union, List
+from typing import List, Literal
 from pydantic import BaseModel, Field
-# Pydantic models
-class HackRxRunRequest(BaseModel):
-    documents: Union[str, List[str]]
-    questions: List[str]
-    search_strategy: str = Field(default="ensemble", description="Search strategy: semantic, lexical, hybrid, ensemble")
+
+SearchStrategy = Literal["semantic", "lexical", "hybrid", "ensemble"]
+
+
+class ChatTurn(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=4000)
+
+class AskRequest(BaseModel):
+    documents: List[str] = Field(min_length=1, max_length=20)
+    question: str = Field(min_length=1, max_length=4000)
+    search_strategy: SearchStrategy = "ensemble"
+    history: List[ChatTurn] = Field(default_factory=list)
 
 class ParseRequest(BaseModel):
-    url: str
+    document_id: str
+
+
+class ImportRequest(BaseModel):
+    url: str = Field(min_length=1, max_length=2048)
+
 
 class ParseBatchRequest(BaseModel):
-    urls: List[str]
+    document_ids: List[str] = Field(min_length=1, max_length=20)
 
 class SearchRequest(BaseModel):
-    query: str
-    strategy: str = Field(default="ensemble", description="Search strategy: semantic, lexical, hybrid, ensemble")
-    top_k: int = Field(default=10, description="Number of results to return")
+    documents: List[str] = Field(min_length=1, max_length=20)
+    query: str = Field(min_length=1, max_length=4000)
+    strategy: SearchStrategy = "ensemble"
+    top_k: int = Field(default=10, ge=1, le=50, description="Number of results to return")
 
 class MultiSearchRequest(BaseModel):
-    queries: List[str]
-    strategy: str = Field(default="ensemble", description="Search strategy: semantic, lexical, hybrid, ensemble")
-    top_k: int = Field(default=10, description="Number of results to return")
-
-class IngestionResult(BaseModel):
-    source: str
-    success: bool
+    documents: List[str] = Field(min_length=1, max_length=20)
+    queries: List[str] = Field(min_length=1, max_length=20)
+    strategy: SearchStrategy = "ensemble"
+    top_k: int = Field(default=10, ge=1, le=50, description="Number of results to return")
